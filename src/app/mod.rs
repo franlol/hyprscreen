@@ -11,8 +11,9 @@ pub fn build(startup: Option<crate::cli::StartupAction>) -> gtk::Application {
         }
         load_css();
         let window = crate::ui::main_window::build(app, startup);
-        window.present();
-        crate::hyprland::float_window_once();
+        if startup.is_none() {
+            window.present();
+        }
     });
 
     app
@@ -93,8 +94,8 @@ button {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
-    padding: 0 !important;
-    min-height: 0 !important;
+    padding: 0;
+    min-height: 0;
 }
 
 .hs-tbtn:hover {

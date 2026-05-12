@@ -99,15 +99,33 @@ pub fn float_window_once() {
 
     // Mapping is asynchronous, so apply the floating/centering hint shortly
     // after the main window is presented and once more as a lightweight retry.
-    glib::timeout_add_local_once(Duration::from_millis(120), || {
-        dispatch("setfloating active");
-        dispatch("centerwindow");
-    });
+    // Target hyprscreen by title — using `active` floats whatever happens to be
+    // focused, which in CLI subcommand flow can be the user's terminal.
+    let title = "Hyprscreen".to_string();
+    for delay in [120_u64, 320_u64] {
+        let title = title.clone();
+        glib::timeout_add_local_once(Duration::from_millis(delay), move || {
+            if let Some(selector) = selector_for_title(&title) {
+                dispatch_setfloating(&selector);
+                if is_active_window(&title) {
+                    dispatch("centerwindow");
+                }
+            }
+        });
+    }
+}
 
-    glib::timeout_add_local_once(Duration::from_millis(320), || {
-        dispatch("setfloating active");
-        dispatch("centerwindow");
-    });
+fn is_active_window(title: &str) -> bool {
+    let Ok(output) = Command::new("hyprctl").args(["activewindow", "-j"]).output() else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let Ok(value): Result<serde_json::Value, _> = serde_json::from_slice(&output.stdout) else {
+        return false;
+    };
+    value.get("title").and_then(|t| t.as_str()) == Some(title)
 }
 
 pub fn place_window_exact(window_match: &str, x: i32, y: i32) {

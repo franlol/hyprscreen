@@ -82,6 +82,7 @@ pub fn build(
         .resizable(false)
         .build();
     window.set_decorated(false);
+    window.connect_map(|_| crate::hyprland::float_window_once());
 
     let stack = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
@@ -1693,9 +1694,19 @@ fn set_primary_button_content(button: &gtk::Button, mode: Mode) {
 }
 
 fn icon_image(icon_key: &str, size: i32, css_class: Option<&str>) -> gtk::Image {
-    let file = gio::File::for_path(icon_path(icon_key));
-    let gicon = gio::FileIcon::new(&file);
-    let image = gtk::Image::from_gicon(&gicon);
+    let bytes = glib::Bytes::from_static(icon_bytes(icon_key));
+    let stream = gio::MemoryInputStream::from_bytes(&bytes);
+    let render = size * 2;
+    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream_at_scale(
+        &stream,
+        render,
+        render,
+        true,
+        gio::Cancellable::NONE,
+    )
+    .expect("failed to rasterize embedded SVG");
+    let texture = gtk::gdk::Texture::for_pixbuf(&pixbuf);
+    let image = gtk::Image::from_paintable(Some(&texture));
     image.set_pixel_size(size);
     if let Some(css_class) = css_class {
         image.add_css_class(css_class);
@@ -1703,19 +1714,19 @@ fn icon_image(icon_key: &str, size: i32, css_class: Option<&str>) -> gtk::Image 
     image
 }
 
-fn icon_path(icon_key: &str) -> &'static str {
+fn icon_bytes(icon_key: &str) -> &'static [u8] {
     match icon_key {
-        "area" => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/area.svg"),
-        "window" => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/window.svg"),
-        "monitor" => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/monitor.svg"),
-        "back" => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/back.svg"),
-        "refresh" => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/refresh.svg"),
-        "save" => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/save.svg"),
-        "copy" => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/copy.svg"),
-        "reveal" => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/reveal.svg"),
-        "open" => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/open.svg"),
-        "shutter" => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/shutter.svg"),
-        _ => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/area.svg"),
+        "area" => include_bytes!("../../assets/icons/area.svg"),
+        "window" => include_bytes!("../../assets/icons/window.svg"),
+        "monitor" => include_bytes!("../../assets/icons/monitor.svg"),
+        "back" => include_bytes!("../../assets/icons/back.svg"),
+        "refresh" => include_bytes!("../../assets/icons/refresh.svg"),
+        "save" => include_bytes!("../../assets/icons/save.svg"),
+        "copy" => include_bytes!("../../assets/icons/copy.svg"),
+        "reveal" => include_bytes!("../../assets/icons/reveal.svg"),
+        "open" => include_bytes!("../../assets/icons/open.svg"),
+        "shutter" => include_bytes!("../../assets/icons/shutter.svg"),
+        _ => include_bytes!("../../assets/icons/area.svg"),
     }
 }
 

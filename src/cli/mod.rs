@@ -34,10 +34,29 @@ pub fn run() -> anyhow::Result<()> {
         }
     };
 
+    detach_if_interactive();
+
     gtk::init()?;
     let app = crate::app::build(startup);
     let _exit = gtk::prelude::ApplicationExtManual::run_with_args::<&str>(&app, &[]);
     Ok(())
+}
+
+fn detach_if_interactive() {
+    use std::os::fd::AsRawFd;
+
+    let stdin_is_tty = unsafe { libc::isatty(std::io::stdin().as_raw_fd()) } == 1;
+    if !stdin_is_tty {
+        return;
+    }
+
+    match unsafe { libc::fork() } {
+        -1 => eprintln!("hyprscreen: fork failed, running in foreground"),
+        0 => {
+            unsafe { libc::setsid() };
+        }
+        _ => std::process::exit(0),
+    }
 }
 
 fn parse_target(value: &str) -> StartupTarget {
