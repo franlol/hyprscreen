@@ -30,7 +30,11 @@ sudo install -Dm755 target/release/hyprscreen /usr/local/bin/hyprscreen
 
 Requires: `slurp`, `grim`, `wf-recorder`, `wl-clipboard`, `hyprctl`, `ffmpeg`.
 
-AUR package coming soon.
+### AUR
+
+```bash
+paru -S hyprscreen
+```
 
 ## Usage
 
