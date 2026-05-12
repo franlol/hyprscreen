@@ -9,7 +9,7 @@ license=('MIT')
 depends=('gtk4' 'grim' 'slurp' 'wf-recorder' 'wl-clipboard' 'hyprland' 'ffmpeg')
 makedepends=('cargo' 'pkg-config')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('6120f69946878f6bf26e6279dc9ac921e98a7a48c4210eef32aa91002a9bece1')
 
 prepare() {
     cd "$pkgname-$pkgver"
