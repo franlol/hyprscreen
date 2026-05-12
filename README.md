@@ -4,7 +4,12 @@
 
 Fast. Native. One window. No compromises.
 
-![Hyprscreen](docs/assets/hero.png)
+<p align="center">
+  <img src="assets/screenshots/preview.webp" width="100%" alt="Screenshot and Record modes" />
+</p>
+<p align="center">
+  <img src="assets/screenshots/hud.webp" width="55%" alt="Recording HUD" />
+</p>
 
 ## Features
 
