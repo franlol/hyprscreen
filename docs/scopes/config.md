@@ -2,7 +2,7 @@
 
 ## Format
 
-- File: `~/.config/hyprscreen.conf`
+- File: `~/.config/hyprscreen/hyprscreen.conf`
 - Syntax: `key=value`
 - Grouped by commented scopes
 

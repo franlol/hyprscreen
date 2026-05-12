@@ -53,7 +53,7 @@ bind = SUPER SHIFT, PRINT, exec, hyprscreen stop
 
 ## Configuration
 
-Optional config at `~/.config/hyprscreen.conf`. All keys are optional — missing values fall back to sensible defaults.
+Optional config at `~/.config/hyprscreen/hyprscreen.conf`. All keys are optional — missing values fall back to sensible defaults.
 
 ```ini
 # General

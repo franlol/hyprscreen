@@ -64,6 +64,6 @@ The main app flow stays in one window. Only the recording HUD may use a separate
 
 ## Runtime Config
 
-- The app reads `~/.config/hyprscreen.conf`.
+- The app reads `~/.config/hyprscreen/hyprscreen.conf`.
 - Config controls UI defaults, save directories, naming, recording reminder cadence, and integration commands.
 - Invalid config values fall back silently to internal defaults.

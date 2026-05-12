@@ -126,7 +126,7 @@ fn config_path() -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .unwrap_or_else(|| PathBuf::from(".config"));
 
-    base.join("hyprscreen.conf")
+    base.join("hyprscreen").join("hyprscreen.conf")
 }
 
 fn expand_home(value: &str) -> PathBuf {

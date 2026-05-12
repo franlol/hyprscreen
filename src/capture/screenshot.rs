@@ -58,33 +58,31 @@ pub fn capture_area() -> Result<PathBuf> {
     capture_geometry(&geometry)
 }
 
-pub fn capture_monitor() -> Result<PathBuf> {
+pub fn select_monitor() -> Result<String> {
     let monitors = available_monitors()?;
     if monitors.is_empty() {
         bail!("no eligible monitors found")
     }
-
     let geometry = select_monitor_geometry(&monitors)?;
     let (x, y, width, height) = parse_geometry(&geometry)?;
-    let target = monitors
+    monitors
         .into_iter()
-        .find(|monitor| {
-            monitor.x == x && monitor.y == y && monitor.width == width && monitor.height == height
-        })
-        .ok_or_else(|| anyhow!("selected monitor could not be resolved"))?;
+        .find(|m| m.x == x && m.y == y && m.width == width && m.height == height)
+        .map(|m| m.name)
+        .ok_or_else(|| anyhow!("selected monitor could not be resolved"))
+}
 
+pub fn capture_by_monitor_name(name: &str) -> Result<PathBuf> {
     let path = temp_file_path()?;
     let status = Command::new("grim")
         .arg("-o")
-        .arg(&target.name)
+        .arg(name)
         .arg(&path)
         .status()
         .context("failed to launch grim")?;
-
     if !status.success() {
-        return Err(anyhow!("grim failed to capture the focused monitor"));
+        return Err(anyhow!("grim failed to capture the monitor"));
     }
-
     Ok(path)
 }
 

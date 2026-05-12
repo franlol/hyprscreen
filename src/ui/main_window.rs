@@ -979,65 +979,157 @@ fn run_capture_action(
     let delay_ms = if target == Target::Monitor { 220 } else { 60 };
 
     glib::timeout_add_local_once(Duration::from_millis(delay_ms), move || {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let result = match target {
-                Target::Area => crate::capture::screenshot::capture_area(),
-                Target::Window => crate::capture::screenshot::capture_window(),
-                Target::Monitor => crate::capture::screenshot::capture_monitor(),
-            };
-            let _ = tx.send(result);
-        });
+        if target == Target::Monitor {
+            // Phase 1: run slurp, get monitor name
+            let (sel_tx, sel_rx) = std::sync::mpsc::channel::<anyhow::Result<String>>();
+            std::thread::spawn(move || {
+                let _ = sel_tx.send(crate::capture::screenshot::select_monitor());
+            });
 
-        let overlays_cell = Rc::new(RefCell::new(Some(overlays)));
-        glib::timeout_add_local(Duration::from_millis(50), move || {
-            let result = match rx.try_recv() {
-                Ok(r) => r,
-                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
-                Err(_) => return glib::ControlFlow::Break,
-            };
+            let overlays_cell = Rc::new(RefCell::new(Some(overlays)));
+            glib::timeout_add_local(Duration::from_millis(50), move || {
+                let sel_result = match sel_rx.try_recv() {
+                    Ok(r) => r,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                    Err(_) => return glib::ControlFlow::Break,
+                };
 
-            if let Some(overlays) = overlays_cell.borrow_mut().take() {
-                close_monitor_identifiers(overlays);
-            }
-
-            window.present();
-
-            if let Some((cta_button, _)) = &setup_feedback {
-                cta_button.set_sensitive(true);
-            }
-
-            match result {
-                Ok(path) => {
-                    {
-                        let mut preview = preview_state.borrow_mut();
-                        preview.temp_path = Some(path.clone());
-                        preview.current_path = Some(path.clone());
-                        preview.thumbnail_path = None;
-                        preview.kind = PreviewKind::Screenshot;
-                    }
-                    save_button.remove_css_class("mode-rec");
-                    save_button.add_css_class("mode-shot");
-                    load_preview_image(&path, &preview_picture, &preview_meta_label);
-                    set_status_neutral(&preview_status_label, "");
-                    save_button.set_sensitive(true);
-                    set_action_button_content(&copy_button, "copy", "Copy");
-                    copy_button.set_sensitive(true);
-                    reveal_button.set_sensitive(false);
-                    stack.set_visible_child_name("preview");
+                if let Some(ov) = overlays_cell.borrow_mut().take() {
+                    close_monitor_identifiers(ov);
                 }
-                Err(error) => {
-                    if let Some((_, status_label)) = &setup_feedback {
-                        set_status_err(status_label, &format!("Capture failed: {error}"));
-                        stack.set_visible_child_name("setup");
-                    } else {
-                        set_status_err(&preview_status_label, &format!("Capture failed: {error}"));
+
+                let monitor_name = match sel_result {
+                    Err(error) => {
+                        window.present();
+                        if let Some((cta_button, _)) = &setup_feedback {
+                            cta_button.set_sensitive(true);
+                        }
+                        if let Some((_, status_label)) = &setup_feedback {
+                            set_status_err(status_label, &format!("Capture failed: {error}"));
+                            stack.set_visible_child_name("setup");
+                        } else {
+                            set_status_err(&preview_status_label, &format!("Capture failed: {error}"));
+                        }
+                        return glib::ControlFlow::Break;
+                    }
+                    Ok(name) => name,
+                };
+
+                // Phase 2: wait for compositor to repaint, then capture
+                let window2 = window.clone();
+                let stack2 = stack.clone();
+                let preview_state2 = preview_state.clone();
+                let preview_picture2 = preview_picture.clone();
+                let preview_meta_label2 = preview_meta_label.clone();
+                let preview_status_label2 = preview_status_label.clone();
+                let save_button2 = save_button.clone();
+                let copy_button2 = copy_button.clone();
+                let reveal_button2 = reveal_button.clone();
+                let setup_feedback2 = setup_feedback.clone();
+                glib::timeout_add_local_once(Duration::from_millis(80), move || {
+                    let (cap_tx, cap_rx) = std::sync::mpsc::channel::<anyhow::Result<std::path::PathBuf>>();
+                    std::thread::spawn(move || {
+                        let _ = cap_tx.send(crate::capture::screenshot::capture_by_monitor_name(&monitor_name));
+                    });
+
+                    glib::timeout_add_local(Duration::from_millis(50), move || {
+                        let result = match cap_rx.try_recv() {
+                            Ok(r) => r,
+                            Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                            Err(_) => return glib::ControlFlow::Break,
+                        };
+
+                        window2.present();
+                        if let Some((cta_button, _)) = &setup_feedback2 {
+                            cta_button.set_sensitive(true);
+                        }
+                        match result {
+                            Ok(path) => {
+                                {
+                                    let mut preview = preview_state2.borrow_mut();
+                                    preview.temp_path = Some(path.clone());
+                                    preview.current_path = Some(path.clone());
+                                    preview.thumbnail_path = None;
+                                    preview.kind = PreviewKind::Screenshot;
+                                }
+                                save_button2.remove_css_class("mode-rec");
+                                save_button2.add_css_class("mode-shot");
+                                load_preview_image(&path, &preview_picture2, &preview_meta_label2);
+                                set_status_neutral(&preview_status_label2, "");
+                                save_button2.set_sensitive(true);
+                                set_action_button_content(&copy_button2, "copy", "Copy");
+                                copy_button2.set_sensitive(true);
+                                reveal_button2.set_sensitive(false);
+                                stack2.set_visible_child_name("preview");
+                            }
+                            Err(error) => {
+                                if let Some((_, status_label)) = &setup_feedback2 {
+                                    set_status_err(status_label, &format!("Capture failed: {error}"));
+                                    stack2.set_visible_child_name("setup");
+                                } else {
+                                    set_status_err(&preview_status_label2, &format!("Capture failed: {error}"));
+                                }
+                            }
+                        }
+                        glib::ControlFlow::Break
+                    });
+                });
+
+                glib::ControlFlow::Break
+            });
+        } else {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = match target {
+                    Target::Area => crate::capture::screenshot::capture_area(),
+                    Target::Window => crate::capture::screenshot::capture_window(),
+                    Target::Monitor => unreachable!(),
+                };
+                let _ = tx.send(result);
+            });
+
+            glib::timeout_add_local(Duration::from_millis(50), move || {
+                let result = match rx.try_recv() {
+                    Ok(r) => r,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                    Err(_) => return glib::ControlFlow::Break,
+                };
+
+                window.present();
+                if let Some((cta_button, _)) = &setup_feedback {
+                    cta_button.set_sensitive(true);
+                }
+                match result {
+                    Ok(path) => {
+                        {
+                            let mut preview = preview_state.borrow_mut();
+                            preview.temp_path = Some(path.clone());
+                            preview.current_path = Some(path.clone());
+                            preview.thumbnail_path = None;
+                            preview.kind = PreviewKind::Screenshot;
+                        }
+                        save_button.remove_css_class("mode-rec");
+                        save_button.add_css_class("mode-shot");
+                        load_preview_image(&path, &preview_picture, &preview_meta_label);
+                        set_status_neutral(&preview_status_label, "");
+                        save_button.set_sensitive(true);
+                        set_action_button_content(&copy_button, "copy", "Copy");
+                        copy_button.set_sensitive(true);
+                        reveal_button.set_sensitive(false);
+                        stack.set_visible_child_name("preview");
+                    }
+                    Err(error) => {
+                        if let Some((_, status_label)) = &setup_feedback {
+                            set_status_err(status_label, &format!("Capture failed: {error}"));
+                            stack.set_visible_child_name("setup");
+                        } else {
+                            set_status_err(&preview_status_label, &format!("Capture failed: {error}"));
+                        }
                     }
                 }
-            }
-
-            glib::ControlFlow::Break
-        });
+                glib::ControlFlow::Break
+            });
+        }
     });
 }
 
