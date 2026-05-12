@@ -8,6 +8,9 @@ Fast. Native. One window. No compromises.
   <img src="assets/screenshots/preview.webp" width="100%" alt="Screenshot and Record modes" />
 </p>
 <p align="center">
+  <img src="assets/screenshots/screenshot.webp" width="80%" alt="Area selection with live dimensions" />
+</p>
+<p align="center">
   <img src="assets/screenshots/hud.webp" width="55%" alt="Recording HUD" />
 </p>
 
