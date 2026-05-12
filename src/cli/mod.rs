@@ -12,6 +12,11 @@ pub enum StartupTarget {
 }
 
 pub fn run() -> anyhow::Result<()> {
+    // SAFETY: set before any threads are spawned and before gtk::init reads it.
+    unsafe {
+        std::env::set_var("GTK_THEME", "Adwaita");
+    }
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
