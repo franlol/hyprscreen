@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -180,6 +182,10 @@ pub fn clear_state_file() {
 }
 
 fn start_with_geometry(geometry: &str, monitor: MonitorPlacement) -> Result<RecordingSession> {
+    // Let the compositor repaint without slurp's overlay so its borders/dim
+    // layer don't bleed into the first frames of the recording.
+    thread::sleep(Duration::from_millis(80));
+
     let temp_path = temp_recording_path()?;
     let child = Command::new("wf-recorder")
         .arg("-g")
@@ -467,6 +473,10 @@ fn select_recording_monitor_geometry(monitors: &[MonitorTarget]) -> Result<Strin
 }
 
 fn start_with_monitor(target: &MonitorTarget) -> Result<RecordingSession> {
+    // Let the compositor repaint without slurp's overlay so its borders/dim
+    // layer don't bleed into the first frames of the recording.
+    thread::sleep(Duration::from_millis(80));
+
     let temp_path = temp_recording_path()?;
     let child = Command::new("wf-recorder")
         .arg("-o")

@@ -3,6 +3,8 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
@@ -73,6 +75,9 @@ pub fn select_monitor() -> Result<String> {
 }
 
 pub fn capture_by_monitor_name(name: &str) -> Result<PathBuf> {
+    // Let the compositor repaint without slurp's overlay before grim captures.
+    thread::sleep(Duration::from_millis(80));
+
     let path = temp_file_path()?;
     let status = Command::new("grim")
         .arg("-o")
@@ -315,6 +320,10 @@ fn select_area_geometry() -> Result<String> {
 }
 
 fn capture_geometry(geometry: &str) -> Result<PathBuf> {
+    // Let the compositor repaint without slurp's overlay before grim captures,
+    // otherwise the selection borders and dim layer bleed into the screenshot.
+    thread::sleep(Duration::from_millis(80));
+
     let path = temp_file_path()?;
     let status = Command::new("grim")
         .arg("-g")
