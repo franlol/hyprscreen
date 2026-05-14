@@ -9,6 +9,9 @@ use gtk::glib;
 use gtk::prelude::*;
 
 const WINDOW_WIDTH: i32 = 400;
+const INITIAL_HIDE_DELAY_MS: u64 = 60;
+const MONITOR_OVERLAY_EXTRA_DELAY_MS: u64 = 220;
+const SELECTION_POLL_INTERVAL_MS: u64 = 50;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
     Screenshot,
@@ -165,7 +168,6 @@ pub fn build(
         &last_action,
         &recording_state,
         &setup_cta,
-        &show_recording_hud,
         &preview_picture,
         &preview_meta_label,
         &preview_status_label,
@@ -611,7 +613,6 @@ fn build_preview_page(
     last_action: &Rc<RefCell<Option<LastAction>>>,
     recording_state: &Rc<RefCell<Option<ActiveRecording>>>,
     setup_cta: &Rc<RefCell<Option<gtk::Button>>>,
-    _show_recording_hud: &Rc<RefCell<bool>>,
     preview_picture: &gtk::Picture,
     preview_meta_label: &gtk::Label,
     preview_status_label: &gtk::Label,
@@ -977,160 +978,124 @@ fn run_capture_action(
     } else {
         Vec::new()
     };
-    let delay_ms = if target == Target::Monitor { 220 } else { 60 };
+    let delay_ms = if target == Target::Monitor { MONITOR_OVERLAY_EXTRA_DELAY_MS } else { INITIAL_HIDE_DELAY_MS };
 
     glib::timeout_add_local_once(Duration::from_millis(delay_ms), move || {
-        if target == Target::Monitor {
-            // Phase 1: run slurp, get monitor name
-            let (sel_tx, sel_rx) = std::sync::mpsc::channel::<anyhow::Result<String>>();
-            std::thread::spawn(move || {
-                let _ = sel_tx.send(crate::capture::screenshot::select_monitor());
-            });
+        // Phase 1: run slurp on a worker thread.
+        // Area/Window return a geometry string; Monitor returns the output name.
+        let (sel_tx, sel_rx) = std::sync::mpsc::channel::<anyhow::Result<String>>();
+        std::thread::spawn(move || {
+            let result = match target {
+                Target::Area => crate::capture::screenshot::select_area(),
+                Target::Window => crate::capture::screenshot::select_window(),
+                Target::Monitor => crate::capture::screenshot::select_monitor(),
+            };
+            let _ = sel_tx.send(result);
+        });
 
-            let overlays_cell = Rc::new(RefCell::new(Some(overlays)));
-            glib::timeout_add_local(Duration::from_millis(50), move || {
-                let sel_result = match sel_rx.try_recv() {
-                    Ok(r) => r,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
-                    Err(_) => return glib::ControlFlow::Break,
-                };
+        let overlays_cell = Rc::new(RefCell::new(Some(overlays)));
+        glib::timeout_add_local(Duration::from_millis(SELECTION_POLL_INTERVAL_MS), move || {
+            let sel_result = match sel_rx.try_recv() {
+                Ok(r) => r,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(_) => return glib::ControlFlow::Break,
+            };
 
-                if let Some(ov) = overlays_cell.borrow_mut().take() {
-                    close_monitor_identifiers(ov);
-                }
+            if let Some(ov) = overlays_cell.borrow_mut().take() {
+                close_monitor_identifiers(ov);
+            }
 
-                let monitor_name = match sel_result {
-                    Err(error) => {
-                        window.present();
-                        if let Some((cta_button, _)) = &setup_feedback {
-                            cta_button.set_sensitive(true);
-                        }
-                        if let Some((_, status_label)) = &setup_feedback {
-                            set_status_err(status_label, &format!("Capture failed: {error}"));
-                            stack.set_visible_child_name("setup");
-                        } else {
-                            set_status_err(&preview_status_label, &format!("Capture failed: {error}"));
-                        }
-                        return glib::ControlFlow::Break;
+            let selection = match sel_result {
+                Err(error) => {
+                    if let Some((cta_button, _)) = &setup_feedback {
+                        cta_button.set_sensitive(true);
                     }
-                    Ok(name) => name,
-                };
+                    report_action_error(
+                        "Capture failed", &error, &window, &stack,
+                        setup_feedback.as_ref(), &preview_status_label, true,
+                    );
+                    return glib::ControlFlow::Break;
+                }
+                Ok(s) => s,
+            };
 
-                // Phase 2: wait for compositor to repaint, then capture
-                let window2 = window.clone();
-                let stack2 = stack.clone();
-                let preview_state2 = preview_state.clone();
-                let preview_picture2 = preview_picture.clone();
-                let preview_meta_label2 = preview_meta_label.clone();
-                let preview_status_label2 = preview_status_label.clone();
-                let save_button2 = save_button.clone();
-                let copy_button2 = copy_button.clone();
-                let reveal_button2 = reveal_button.clone();
-                let setup_feedback2 = setup_feedback.clone();
-                glib::timeout_add_local_once(Duration::from_millis(80), move || {
-                    let (cap_tx, cap_rx) = std::sync::mpsc::channel::<anyhow::Result<std::path::PathBuf>>();
-                    std::thread::spawn(move || {
-                        let _ = cap_tx.send(crate::capture::screenshot::capture_by_monitor_name(&monitor_name));
-                    });
+            // Phase 2: CompositorRepaintGuard on the worker thread already waited for
+            // closelayer + one frame. This idle hands back to the GTK main loop before
+            // spawning the grim thread.
+            let window2 = window.clone();
+            let stack2 = stack.clone();
+            let preview_state2 = preview_state.clone();
+            let preview_picture2 = preview_picture.clone();
+            let preview_meta_label2 = preview_meta_label.clone();
+            let preview_status_label2 = preview_status_label.clone();
+            let save_button2 = save_button.clone();
+            let copy_button2 = copy_button.clone();
+            let reveal_button2 = reveal_button.clone();
+            let setup_feedback2 = setup_feedback.clone();
 
-                    glib::timeout_add_local(Duration::from_millis(50), move || {
-                        let result = match cap_rx.try_recv() {
-                            Ok(r) => r,
-                            Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
-                            Err(_) => return glib::ControlFlow::Break,
-                        };
-
-                        window2.present();
-                        if let Some((cta_button, _)) = &setup_feedback2 {
-                            cta_button.set_sensitive(true);
+            wait_compositor_frame(move || {
+                let (cap_tx, cap_rx) =
+                    std::sync::mpsc::channel::<anyhow::Result<std::path::PathBuf>>();
+                std::thread::spawn(move || {
+                    let result = match target {
+                        Target::Area => {
+                            crate::capture::screenshot::capture_geometry(&selection)
                         }
-                        match result {
-                            Ok(path) => {
-                                {
-                                    let mut preview = preview_state2.borrow_mut();
-                                    preview.temp_path = Some(path.clone());
-                                    preview.current_path = Some(path.clone());
-                                    preview.thumbnail_path = None;
-                                    preview.kind = PreviewKind::Screenshot;
-                                }
-                                save_button2.remove_css_class("mode-rec");
-                                save_button2.add_css_class("mode-shot");
-                                load_preview_image(&path, &preview_picture2, &preview_meta_label2);
-                                set_status_neutral(&preview_status_label2, "");
-                                save_button2.set_sensitive(true);
-                                set_action_button_content(&copy_button2, "copy", "Copy");
-                                copy_button2.set_sensitive(true);
-                                reveal_button2.set_sensitive(false);
-                                stack2.set_visible_child_name("preview");
-                            }
-                            Err(error) => {
-                                if let Some((_, status_label)) = &setup_feedback2 {
-                                    set_status_err(status_label, &format!("Capture failed: {error}"));
-                                    stack2.set_visible_child_name("setup");
-                                } else {
-                                    set_status_err(&preview_status_label2, &format!("Capture failed: {error}"));
-                                }
-                            }
+                        Target::Window => {
+                            crate::capture::screenshot::capture_window_geometry(&selection)
                         }
-                        glib::ControlFlow::Break
-                    });
+                        Target::Monitor => {
+                            crate::capture::screenshot::capture_by_monitor_name(&selection)
+                        }
+                    };
+                    let _ = cap_tx.send(result);
                 });
 
-                glib::ControlFlow::Break
-            });
-        } else {
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let result = match target {
-                    Target::Area => crate::capture::screenshot::capture_area(),
-                    Target::Window => crate::capture::screenshot::capture_window(),
-                    Target::Monitor => unreachable!(),
-                };
-                let _ = tx.send(result);
-            });
-
-            glib::timeout_add_local(Duration::from_millis(50), move || {
-                let result = match rx.try_recv() {
-                    Ok(r) => r,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
-                    Err(_) => return glib::ControlFlow::Break,
-                };
-
-                window.present();
-                if let Some((cta_button, _)) = &setup_feedback {
-                    cta_button.set_sensitive(true);
-                }
-                match result {
-                    Ok(path) => {
-                        {
-                            let mut preview = preview_state.borrow_mut();
-                            preview.temp_path = Some(path.clone());
-                            preview.current_path = Some(path.clone());
-                            preview.thumbnail_path = None;
-                            preview.kind = PreviewKind::Screenshot;
+                glib::timeout_add_local(Duration::from_millis(SELECTION_POLL_INTERVAL_MS), move || {
+                    let result = match cap_rx.try_recv() {
+                        Ok(r) => r,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            return glib::ControlFlow::Continue
                         }
-                        save_button.remove_css_class("mode-rec");
-                        save_button.add_css_class("mode-shot");
-                        load_preview_image(&path, &preview_picture, &preview_meta_label);
-                        set_status_neutral(&preview_status_label, "");
-                        save_button.set_sensitive(true);
-                        set_action_button_content(&copy_button, "copy", "Copy");
-                        copy_button.set_sensitive(true);
-                        reveal_button.set_sensitive(false);
-                        stack.set_visible_child_name("preview");
+                        Err(_) => return glib::ControlFlow::Break,
+                    };
+
+                    window2.present();
+                    if let Some((cta_button, _)) = &setup_feedback2 {
+                        cta_button.set_sensitive(true);
                     }
-                    Err(error) => {
-                        if let Some((_, status_label)) = &setup_feedback {
-                            set_status_err(status_label, &format!("Capture failed: {error}"));
-                            stack.set_visible_child_name("setup");
-                        } else {
-                            set_status_err(&preview_status_label, &format!("Capture failed: {error}"));
+                    match result {
+                        Ok(path) => {
+                            {
+                                let mut preview = preview_state2.borrow_mut();
+                                preview.temp_path = Some(path.clone());
+                                preview.current_path = Some(path.clone());
+                                preview.thumbnail_path = None;
+                                preview.kind = PreviewKind::Screenshot;
+                            }
+                            save_button2.remove_css_class("mode-rec");
+                            save_button2.add_css_class("mode-shot");
+                            load_preview_image(&path, &preview_picture2, &preview_meta_label2);
+                            set_status_neutral(&preview_status_label2, "");
+                            save_button2.set_sensitive(true);
+                            set_action_button_content(&copy_button2, "copy", "Copy");
+                            copy_button2.set_sensitive(true);
+                            reveal_button2.set_sensitive(false);
+                            stack2.set_visible_child_name("preview");
+                        }
+                        Err(error) => {
+                            report_action_error(
+                                "Capture failed", &error, &window2, &stack2,
+                                setup_feedback2.as_ref(), &preview_status_label2, true,
+                            );
                         }
                     }
-                }
-                glib::ControlFlow::Break
+                    glib::ControlFlow::Break
+                });
             });
-        }
+
+            glib::ControlFlow::Break
+        });
     });
 }
 
@@ -1180,83 +1145,113 @@ fn start_recording_action(
     } else {
         Vec::new()
     };
-    let delay_ms = if target == Target::Monitor { 220 } else { 60 };
+    let delay_ms = if target == Target::Monitor { MONITOR_OVERLAY_EXTRA_DELAY_MS } else { INITIAL_HIDE_DELAY_MS };
 
     glib::timeout_add_local_once(Duration::from_millis(delay_ms), move || {
-        let (tx, rx) = std::sync::mpsc::channel();
+        // Phase 1: run slurp on a worker thread.
+        let (sel_tx, sel_rx) = std::sync::mpsc::channel::<
+            anyhow::Result<crate::capture::record::RecordingSelection>,
+        >();
         std::thread::spawn(move || {
             let result = match target {
-                Target::Area => crate::capture::record::start_area(),
-                Target::Monitor => crate::capture::record::start_monitor(),
-                Target::Window => crate::capture::record::start_window(),
+                Target::Area => crate::capture::record::select_area(),
+                Target::Monitor => crate::capture::record::select_monitor(),
+                Target::Window => crate::capture::record::select_window(),
             };
-            let _ = tx.send(result);
+            let _ = sel_tx.send(result);
         });
 
         let overlays_cell = Rc::new(RefCell::new(Some(overlays)));
-        glib::timeout_add_local(Duration::from_millis(50), move || {
-            let result = match rx.try_recv() {
+        glib::timeout_add_local(Duration::from_millis(SELECTION_POLL_INTERVAL_MS), move || {
+            let sel_result = match sel_rx.try_recv() {
                 Ok(r) => r,
                 Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
                 Err(_) => return glib::ControlFlow::Break,
             };
 
-            if let Some(overlays) = overlays_cell.borrow_mut().take() {
-                close_monitor_identifiers(overlays);
+            if let Some(ov) = overlays_cell.borrow_mut().take() {
+                close_monitor_identifiers(ov);
             }
 
-            match result {
-                Ok(session) => {
-                    let hud_window = if show_hud {
-                        Some(create_recording_hud(&window, &recording_state))
-                    } else {
-                        None
-                    };
-
-                    let monitor = session.monitor;
-                    let indicator_window = if show_hud {
-                        None
-                    } else if crate::config::get().recording_indicator_enabled {
-                        let (w, _dot) = create_recording_indicator(monitor, &recording_state);
-                        Some(w)
-                    } else {
-                        None
-                    };
-
-                    *recording_state.borrow_mut() = Some(ActiveRecording {
-                        child: session.child,
-                        temp_path: session.temp_path,
-                        hud_window,
-                        indicator_window,
-                        started_at: Instant::now(),
-                    });
-
-                    start_recording_poll(
-                        &window,
-                        &stack,
-                        &preview_state,
-                        &recording_state,
-                        &setup_cta,
-                        &preview_picture,
-                        &preview_meta_label,
-                        &preview_status_label,
-                        &setup_status_label,
-                        &save_button,
-                        &copy_button,
-                        &reveal_button,
-                    );
-                }
+            let selection = match sel_result {
                 Err(error) => {
-                    window.present();
                     enable_setup_cta(&setup_cta);
-                    if let Some((_, status_label)) = &setup_feedback {
-                        set_status_err(status_label, &format!("Recording failed: {error}"));
-                    } else {
-                        set_status_err(&setup_status_label, &format!("Recording failed: {error}"));
-                        stack.set_visible_child_name("setup");
+                    report_action_error(
+                        "Recording failed", &error, &window, &stack,
+                        setup_feedback.as_ref(), &setup_status_label, false,
+                    );
+                    return glib::ControlFlow::Break;
+                }
+                Ok(s) => s,
+            };
+
+            // Phase 2: wait for one compositor frame, then launch wf-recorder.
+            // launch_recording is fast (spawn + file write) so runs on the GTK thread.
+            let window2 = window.clone();
+            let stack2 = stack.clone();
+            let preview_state2 = preview_state.clone();
+            let recording_state2 = recording_state.clone();
+            let setup_cta2 = setup_cta.clone();
+            let preview_picture2 = preview_picture.clone();
+            let preview_meta_label2 = preview_meta_label.clone();
+            let preview_status_label2 = preview_status_label.clone();
+            let setup_status_label2 = setup_status_label.clone();
+            let save_button2 = save_button.clone();
+            let copy_button2 = copy_button.clone();
+            let reveal_button2 = reveal_button.clone();
+            let setup_feedback2 = setup_feedback.clone();
+
+            wait_compositor_frame(move || {
+                match crate::capture::record::launch_recording(selection) {
+                    Err(error) => {
+                        enable_setup_cta(&setup_cta2);
+                        report_action_error(
+                            "Recording failed", &error, &window2, &stack2,
+                            setup_feedback2.as_ref(), &setup_status_label2, false,
+                        );
+                    }
+                    Ok(session) => {
+                        let hud_window = if show_hud {
+                            Some(create_recording_hud(&recording_state2))
+                        } else {
+                            None
+                        };
+
+                        let monitor = session.monitor;
+                        let indicator_window = if show_hud {
+                            None
+                        } else if crate::config::get().recording_indicator_enabled {
+                            let (w, _dot) = create_recording_indicator(monitor, &recording_state2);
+                            Some(w)
+                        } else {
+                            None
+                        };
+
+                        *recording_state2.borrow_mut() = Some(ActiveRecording {
+                            child: session.child,
+                            temp_path: session.temp_path,
+                            hud_window,
+                            indicator_window,
+                            started_at: Instant::now(),
+                        });
+
+                        start_recording_poll(
+                            &window2,
+                            &stack2,
+                            &preview_state2,
+                            &recording_state2,
+                            &setup_cta2,
+                            &preview_picture2,
+                            &preview_meta_label2,
+                            &preview_status_label2,
+                            &setup_status_label2,
+                            &save_button2,
+                            &copy_button2,
+                            &reveal_button2,
+                        );
                     }
                 }
-            }
+            });
 
             glib::ControlFlow::Break
         });
@@ -1355,6 +1350,13 @@ fn start_recording_poll(
     });
 }
 
+fn wait_compositor_frame<F: FnOnce() + 'static>(callback: F) {
+    // The worker thread already waited for Hyprland's closelayer event + one
+    // frame via CompositorRepaintGuard. This idle just hands control back to
+    // the GTK main loop before spawning the capture thread.
+    glib::idle_add_local_once(callback);
+}
+
 fn enable_setup_cta(setup_cta: &Rc<RefCell<Option<gtk::Button>>>) {
     if let Some(button) = setup_cta.borrow().as_ref() {
         button.set_sensitive(true);
@@ -1362,7 +1364,6 @@ fn enable_setup_cta(setup_cta: &Rc<RefCell<Option<gtk::Button>>>) {
 }
 
 fn create_recording_hud(
-    _window: &gtk::ApplicationWindow,
     recording_state: &Rc<RefCell<Option<ActiveRecording>>>,
 ) -> gtk::Window {
     let hud = gtk::Window::builder()
@@ -1473,6 +1474,9 @@ fn show_monitor_identifiers(monitors: &[crate::hyprland::Monitor]) -> Vec<gtk::W
 fn close_monitor_identifiers(overlays: Vec<gtk::Window>) {
     for overlay in overlays {
         overlay.close();
+    }
+    if let Some(display) = gtk::gdk::Display::default() {
+        display.sync();
     }
 }
 
@@ -1632,6 +1636,29 @@ fn set_status_ok(label: &gtk::Label, message: &str) {
 
 fn set_status_err(label: &gtk::Label, message: &str) {
     set_status(label, message, StatusKind::Error);
+}
+
+fn report_action_error(
+    prefix: &str,
+    error: &anyhow::Error,
+    window: &gtk::ApplicationWindow,
+    stack: &gtk::Stack,
+    setup_feedback: Option<&(gtk::Button, gtk::Label)>,
+    fallback_label: &gtk::Label,
+    navigate_on_feedback: bool,
+) {
+    window.present();
+    if let Some((_, status_label)) = setup_feedback {
+        set_status_err(status_label, &format!("{prefix}: {error}"));
+        if navigate_on_feedback {
+            stack.set_visible_child_name("setup");
+        }
+    } else {
+        set_status_err(fallback_label, &format!("{prefix}: {error}"));
+        if !navigate_on_feedback {
+            stack.set_visible_child_name("setup");
+        }
+    }
 }
 
 fn set_status_stop_hint(label: &gtk::Label) {

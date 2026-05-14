@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::thread;
-use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -113,47 +112,93 @@ fn state_file_path() -> PathBuf {
 }
 
 fn temp_recording_path() -> Result<PathBuf> {
-    let dir = std::env::temp_dir().join("hyprscreen");
-    fs::create_dir_all(&dir).context("failed to create Hyprscreen temp directory")?;
-    Ok(dir.join(crate::capture::generated_filename("mkv")))
+    Ok(super::hyprscreen_temp_dir()?.join(crate::capture::generated_filename("mkv")))
 }
 
-pub fn start_area() -> Result<RecordingSession> {
+pub enum RecordingSelection {
+    Geometry { geometry: String, monitor: MonitorPlacement, is_window: bool },
+    OutputName { name: String, placement: MonitorPlacement },
+}
+
+pub fn select_area() -> Result<RecordingSelection> {
+    let guard = super::CompositorRepaintGuard::arm();
     let geometry = select_recording_area_geometry()?;
+    guard.wait();
     let monitor = monitor_for_geometry(&geometry)?;
-    start_with_geometry(&geometry, monitor)
+    Ok(RecordingSelection::Geometry { geometry, monitor, is_window: false })
 }
 
-pub fn start_monitor() -> Result<RecordingSession> {
-    let monitors = available_monitors()?;
-    if monitors.is_empty() {
-        bail!("no eligible monitors found")
-    }
-
-    let geometry = select_recording_monitor_geometry(&monitors)?;
-    let (x, y, width, height) = parse_geometry(&geometry)?;
-    let target = monitors
-        .into_iter()
-        .find(|monitor| {
-            monitor.placement.x == x
-                && monitor.placement.y == y
-                && monitor.placement.width == width
-                && monitor.placement.height == height
-        })
-        .ok_or_else(|| anyhow!("selected monitor could not be resolved"))?;
-
-    start_with_monitor(&target)
-}
-
-pub fn start_window() -> Result<RecordingSession> {
+pub fn select_window() -> Result<RecordingSelection> {
     let windows = available_recordable_windows()?;
     if windows.is_empty() {
         bail!("no eligible windows found")
     }
-
+    let guard = super::CompositorRepaintGuard::arm();
     let geometry = select_recording_window_geometry(&windows)?;
+    guard.wait();
     let monitor = monitor_for_geometry(&geometry)?;
-    start_with_geometry(&geometry, monitor)
+    Ok(RecordingSelection::Geometry { geometry, monitor, is_window: true })
+}
+
+pub fn select_monitor() -> Result<RecordingSelection> {
+    let monitors = available_monitors()?;
+    if monitors.is_empty() {
+        bail!("no eligible monitors found")
+    }
+    let guard = super::CompositorRepaintGuard::arm();
+    let geometry = select_recording_monitor_geometry(&monitors)?;
+    guard.wait();
+    let (x, y, width, height) = super::parse_geometry(&geometry)?;
+    let target = monitors
+        .into_iter()
+        .find(|m| {
+            m.placement.x == x
+                && m.placement.y == y
+                && m.placement.width == width
+                && m.placement.height == height
+        })
+        .ok_or_else(|| anyhow!("selected monitor could not be resolved"))?;
+    Ok(RecordingSelection::OutputName {
+        name: target.name,
+        placement: target.placement,
+    })
+}
+
+pub fn launch_recording(sel: RecordingSelection) -> Result<RecordingSession> {
+    match sel {
+        RecordingSelection::Geometry { geometry, monitor, is_window } => {
+            let temp_path = temp_recording_path()?;
+            let inset_px = if is_window { super::hyprland_window_inset() } else { 2 };
+            let inset = super::inset_geometry(&geometry, inset_px).unwrap_or(geometry.clone());
+            let child = Command::new("wf-recorder")
+                .arg("-g")
+                .arg(&inset)
+                .arg("-f")
+                .arg(&temp_path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .context("failed to launch wf-recorder")?;
+            write_state_file(child.id(), &temp_path)?;
+            Ok(RecordingSession { child, temp_path, monitor })
+        }
+        RecordingSelection::OutputName { name, placement } => {
+            let temp_path = temp_recording_path()?;
+            let child = Command::new("wf-recorder")
+                .arg("-o")
+                .arg(&name)
+                .arg("-f")
+                .arg(&temp_path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .context("failed to launch wf-recorder")?;
+            write_state_file(child.id(), &temp_path)?;
+            Ok(RecordingSession { child, temp_path, monitor: placement })
+        }
+    }
 }
 
 pub fn stop_active_recording() -> Result<()> {
@@ -181,31 +226,6 @@ pub fn clear_state_file() {
     let _ = fs::remove_file(state_file_path());
 }
 
-fn start_with_geometry(geometry: &str, monitor: MonitorPlacement) -> Result<RecordingSession> {
-    // Let the compositor repaint without slurp's overlay so its borders/dim
-    // layer don't bleed into the first frames of the recording.
-    thread::sleep(Duration::from_millis(80));
-
-    let temp_path = temp_recording_path()?;
-    let child = Command::new("wf-recorder")
-        .arg("-g")
-        .arg(geometry)
-        .arg("-f")
-        .arg(&temp_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to launch wf-recorder")?;
-
-    write_state_file(child.id(), &temp_path)?;
-
-    Ok(RecordingSession {
-        child,
-        temp_path,
-        monitor,
-    })
-}
 
 fn select_recording_area_geometry() -> Result<String> {
     let output = Command::new("slurp")
@@ -215,7 +235,7 @@ fn select_recording_area_geometry() -> Result<String> {
             "-c",
             "#ff4d4dff",
             "-s",
-            "#ff4d4d22",
+            "#00000000",
             "-w",
             "3",
             "-d",
@@ -240,7 +260,7 @@ fn select_recording_area_geometry() -> Result<String> {
 }
 
 fn monitor_for_geometry(geometry: &str) -> Result<MonitorPlacement> {
-    let (x, y, width, height) = parse_geometry(geometry)?;
+    let (x, y, width, height) = super::parse_geometry(geometry)?;
     let center_x = x + (width / 2);
     let center_y = y + (height / 2);
 
@@ -310,7 +330,7 @@ fn available_recordable_windows() -> Result<Vec<String>> {
 
     Ok(clients
         .into_iter()
-        .filter(|client| client.mapped && !client.hidden && client.class != "land.hypr.Hyprscreen")
+        .filter(|client| client.mapped && !client.hidden && client.class != super::SELF_APP_CLASS)
         .filter(|client| client.size[0] > 0 && client.size[1] > 0)
         .filter(|client| {
             active_workspaces_by_monitor
@@ -341,7 +361,7 @@ fn select_recording_window_geometry(choices: &[String]) -> Result<String> {
             "-c",
             "#ff4d4dff",
             "-s",
-            "#ff4d4d22",
+            "#00000000",
             "-w",
             "3",
         ])
@@ -354,7 +374,6 @@ fn select_recording_window_geometry(choices: &[String]) -> Result<String> {
         .stdin
         .take()
         .ok_or_else(|| anyhow!("failed to open slurp stdin"))?;
-    use std::io::Write;
     stdin.write_all(choices.join("\n").as_bytes())?;
     drop(stdin);
 
@@ -435,7 +454,7 @@ fn select_recording_monitor_geometry(monitors: &[MonitorTarget]) -> Result<Strin
             "-c",
             "#ff4d4dff",
             "-s",
-            "#ff4d4d22",
+            "#00000000",
             "-w",
             "6",
         ])
@@ -448,7 +467,6 @@ fn select_recording_monitor_geometry(monitors: &[MonitorTarget]) -> Result<Strin
         .stdin
         .take()
         .ok_or_else(|| anyhow!("failed to open slurp stdin"))?;
-    use std::io::Write;
     stdin.write_all(choices.join("\n").as_bytes())?;
     drop(stdin);
 
@@ -472,50 +490,12 @@ fn select_recording_monitor_geometry(monitors: &[MonitorTarget]) -> Result<Strin
     Ok(geometry)
 }
 
-fn start_with_monitor(target: &MonitorTarget) -> Result<RecordingSession> {
-    // Let the compositor repaint without slurp's overlay so its borders/dim
-    // layer don't bleed into the first frames of the recording.
-    thread::sleep(Duration::from_millis(80));
 
-    let temp_path = temp_recording_path()?;
-    let child = Command::new("wf-recorder")
-        .arg("-o")
-        .arg(&target.name)
-        .arg("-f")
-        .arg(&temp_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to launch wf-recorder")?;
 
-    write_state_file(child.id(), &temp_path)?;
-
-    Ok(RecordingSession {
-        child,
-        temp_path,
-        monitor: target.placement,
-    })
-}
-
-fn parse_geometry(geometry: &str) -> Result<(i32, i32, i32, i32)> {
-    let (origin, size) = geometry
-        .split_once(' ')
-        .ok_or_else(|| anyhow!("geometry did not contain a size separator"))?;
-    let (x, y) = origin
-        .split_once(',')
-        .ok_or_else(|| anyhow!("geometry origin was invalid"))?;
-    let (width, height) = size
-        .split_once('x')
-        .ok_or_else(|| anyhow!("geometry size was invalid"))?;
-
-    Ok((x.parse()?, y.parse()?, width.parse()?, height.parse()?))
-}
-
-fn write_state_file(pid: u32, temp_path: &PathBuf) -> Result<()> {
+fn write_state_file(pid: u32, temp_path: &Path) -> Result<()> {
     let state = RecordingStateFile {
         pid,
-        temp_path: temp_path.clone(),
+        temp_path: temp_path.to_path_buf(),
     };
     let bytes = serde_json::to_vec(&state).context("failed to serialize recording state")?;
     fs::write(state_file_path(), bytes).context("failed to write recording state file")?;
@@ -527,7 +507,7 @@ fn read_state_file() -> Result<RecordingStateFile> {
     serde_json::from_slice(&bytes).context("failed to parse recording state file")
 }
 
-pub fn reveal_in_file_manager(path: &PathBuf) -> Result<RevealMethod> {
+pub fn reveal_in_file_manager(path: &Path) -> Result<RevealMethod> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("recording path has no parent directory"))?;
@@ -569,7 +549,7 @@ impl OpenMethod {
     }
 }
 
-pub fn open_video_file(path: &PathBuf) -> Result<OpenMethod> {
+pub fn open_video_file(path: &Path) -> Result<OpenMethod> {
     if let Some(command) = crate::config::get().open_video_command.as_deref() {
         launch_open_command(command, path)
             .with_context(|| format!("failed to launch configured open command `{command}`"))?;
@@ -655,7 +635,7 @@ fn probe_video_metadata(path: &Path) -> Result<(Option<f64>, Option<u32>, Option
 }
 
 fn generate_video_thumbnail(path: &Path) -> Result<PathBuf> {
-    let thumbnail_path = std::env::temp_dir().join("hyprscreen").join(format!(
+    let thumbnail_path = super::hyprscreen_temp_dir()?.join(format!(
         "{}-thumb.png",
         crate::capture::generated_filename("video-preview")
     ));
