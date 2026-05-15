@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -42,8 +41,6 @@ pub struct RecordingSession {
 
 #[derive(Debug, Deserialize)]
 struct MonitorInfo {
-    id: i32,
-    name: String,
     x: i32,
     y: i32,
     width: i32,
@@ -51,32 +48,8 @@ struct MonitorInfo {
     scale: f64,
     focused: bool,
     disabled: bool,
-    #[serde(rename = "activeWorkspace")]
-    active_workspace: WorkspaceInfo,
 }
 
-#[derive(Debug, Clone)]
-struct MonitorTarget {
-    name: String,
-    placement: MonitorPlacement,
-}
-
-#[derive(Debug, Deserialize)]
-struct WorkspaceInfo {
-    id: i32,
-}
-
-#[derive(Debug, Deserialize)]
-struct ClientInfo {
-    mapped: bool,
-    hidden: bool,
-    class: String,
-    title: String,
-    monitor: i32,
-    workspace: WorkspaceInfo,
-    at: [i32; 2],
-    size: [i32; 2],
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct RecordingStateFile {
@@ -129,7 +102,7 @@ pub fn select_area() -> Result<RecordingSelection> {
 }
 
 pub fn select_window() -> Result<RecordingSelection> {
-    let windows = available_recordable_windows()?;
+    let windows = super::visible_window_geometries()?;
     if windows.is_empty() {
         bail!("no eligible windows found")
     }
@@ -141,7 +114,7 @@ pub fn select_window() -> Result<RecordingSelection> {
 }
 
 pub fn select_monitor() -> Result<RecordingSelection> {
-    let monitors = available_monitors()?;
+    let monitors = crate::hyprland::enumerate_monitors();
     if monitors.is_empty() {
         bail!("no eligible monitors found")
     }
@@ -151,16 +124,11 @@ pub fn select_monitor() -> Result<RecordingSelection> {
     let (x, y, width, height) = super::parse_geometry(&geometry)?;
     let target = monitors
         .into_iter()
-        .find(|m| {
-            m.placement.x == x
-                && m.placement.y == y
-                && m.placement.width == width
-                && m.placement.height == height
-        })
+        .find(|m| m.x == x && m.y == y && m.width == width && m.height == height)
         .ok_or_else(|| anyhow!("selected monitor could not be resolved"))?;
     Ok(RecordingSelection::OutputName {
         name: target.name,
-        placement: target.placement,
+        placement: MonitorPlacement { x: target.x, y: target.y, width: target.width, height: target.height },
     })
 }
 
@@ -298,60 +266,6 @@ fn monitor_for_geometry(geometry: &str) -> Result<MonitorPlacement> {
         .ok_or_else(|| anyhow!("no suitable monitor found for recording area"))
 }
 
-fn available_recordable_windows() -> Result<Vec<String>> {
-    let monitor_output = Command::new("hyprctl")
-        .args(["monitors", "-j"])
-        .output()
-        .context("failed to query Hyprland monitors")?;
-
-    if !monitor_output.status.success() {
-        bail!("hyprctl monitors failed")
-    }
-
-    let monitors: Vec<MonitorInfo> = serde_json::from_slice(&monitor_output.stdout)
-        .context("failed to parse Hyprland monitors JSON")?;
-    let active_workspaces_by_monitor = monitors
-        .into_iter()
-        .filter(|monitor| !monitor.disabled)
-        .map(|monitor| (monitor.id, monitor.active_workspace.id))
-        .collect::<HashMap<_, _>>();
-
-    let output = Command::new("hyprctl")
-        .args(["clients", "-j"])
-        .output()
-        .context("failed to query Hyprland clients")?;
-
-    if !output.status.success() {
-        bail!("hyprctl clients failed")
-    }
-
-    let clients: Vec<ClientInfo> =
-        serde_json::from_slice(&output.stdout).context("failed to parse Hyprland clients JSON")?;
-
-    Ok(clients
-        .into_iter()
-        .filter(|client| client.mapped && !client.hidden && client.class != super::SELF_APP_CLASS)
-        .filter(|client| client.size[0] > 0 && client.size[1] > 0)
-        .filter(|client| {
-            active_workspaces_by_monitor
-                .get(&client.monitor)
-                .is_some_and(|workspace_id| client.workspace.id == *workspace_id)
-        })
-        .map(|client| {
-            let title = if client.title.is_empty() {
-                client.class.clone()
-            } else {
-                format!("{} - {}", client.class, client.title.replace('\n', " "))
-            };
-
-            format!(
-                "{},{} {}x{} {}",
-                client.at[0], client.at[1], client.size[0], client.size[1], title
-            )
-        })
-        .collect())
-}
-
 fn select_recording_window_geometry(choices: &[String]) -> Result<String> {
     let mut child = Command::new("slurp")
         .args([
@@ -406,44 +320,10 @@ fn logical_monitor_placement(monitor: &MonitorInfo) -> MonitorPlacement {
     }
 }
 
-fn available_monitors() -> Result<Vec<MonitorTarget>> {
-    let output = Command::new("hyprctl")
-        .args(["monitors", "-j"])
-        .output()
-        .context("failed to query Hyprland monitors")?;
-
-    if !output.status.success() {
-        bail!("hyprctl monitors failed")
-    }
-
-    let monitors: Vec<MonitorInfo> =
-        serde_json::from_slice(&output.stdout).context("failed to parse Hyprland monitors JSON")?;
-
-    Ok(monitors
-        .into_iter()
-        .filter(|monitor| !monitor.disabled)
-        .map(|monitor| {
-            let placement = logical_monitor_placement(&monitor);
-            MonitorTarget {
-                name: monitor.name,
-                placement,
-            }
-        })
-        .collect())
-}
-
-fn select_recording_monitor_geometry(monitors: &[MonitorTarget]) -> Result<String> {
+fn select_recording_monitor_geometry(monitors: &[crate::hyprland::Monitor]) -> Result<String> {
     let choices = monitors
         .iter()
-        .map(|monitor| {
-            format!(
-                "{},{} {}x{}",
-                monitor.placement.x,
-                monitor.placement.y,
-                monitor.placement.width,
-                monitor.placement.height
-            )
-        })
+        .map(|m| format!("{},{} {}x{}", m.x, m.y, m.width, m.height))
         .collect::<Vec<_>>();
 
     let mut child = Command::new("slurp")
@@ -456,7 +336,7 @@ fn select_recording_monitor_geometry(monitors: &[MonitorTarget]) -> Result<Strin
             "-s",
             "#00000000",
             "-w",
-            "6",
+            "8",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

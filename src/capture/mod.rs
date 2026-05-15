@@ -1,7 +1,8 @@
 //! Capture pipeline for screenshots and recordings.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::Local;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -117,6 +118,74 @@ impl CompositorRepaintGuard {
         }
         wait_for_selection_layer_gone();
     }
+}
+
+#[derive(serde::Deserialize)]
+struct WindowQueryMonitor {
+    id: i32,
+    disabled: bool,
+    #[serde(rename = "activeWorkspace")]
+    active_workspace: WindowQueryWorkspace,
+}
+
+#[derive(serde::Deserialize)]
+struct WindowQueryWorkspace {
+    id: i32,
+}
+
+#[derive(serde::Deserialize)]
+struct WindowQueryClient {
+    mapped: bool,
+    hidden: bool,
+    class: String,
+    title: String,
+    monitor: i32,
+    workspace: WindowQueryWorkspace,
+    at: [i32; 2],
+    size: [i32; 2],
+}
+
+/// Returns slurp-ready geometry strings for all visible, eligible windows.
+pub(super) fn visible_window_geometries() -> Result<Vec<String>> {
+    let monitor_out = Command::new("hyprctl")
+        .args(["monitors", "-j"])
+        .output()
+        .context("failed to query Hyprland monitors")?;
+    if !monitor_out.status.success() {
+        bail!("hyprctl monitors failed");
+    }
+    let monitors: Vec<WindowQueryMonitor> = serde_json::from_slice(&monitor_out.stdout)
+        .context("failed to parse Hyprland monitors JSON")?;
+    let active_workspaces: HashMap<i32, i32> = monitors
+        .into_iter()
+        .filter(|m| !m.disabled)
+        .map(|m| (m.id, m.active_workspace.id))
+        .collect();
+
+    let client_out = Command::new("hyprctl")
+        .args(["clients", "-j"])
+        .output()
+        .context("failed to query Hyprland clients")?;
+    if !client_out.status.success() {
+        bail!("hyprctl clients failed");
+    }
+    let clients: Vec<WindowQueryClient> = serde_json::from_slice(&client_out.stdout)
+        .context("failed to parse Hyprland clients JSON")?;
+
+    Ok(clients
+        .into_iter()
+        .filter(|c| c.mapped && !c.hidden && c.class != SELF_APP_CLASS)
+        .filter(|c| c.size[0] > 0 && c.size[1] > 0)
+        .filter(|c| active_workspaces.get(&c.monitor).is_some_and(|ws| c.workspace.id == *ws))
+        .map(|c| {
+            let title = if c.title.is_empty() {
+                c.class.clone()
+            } else {
+                format!("{} - {}", c.class, c.title.replace('\n', " "))
+            };
+            format!("{},{} {}x{} {}", c.at[0], c.at[1], c.size[0], c.size[1], title)
+        })
+        .collect())
 }
 
 fn wait_for_selection_layer_gone() {

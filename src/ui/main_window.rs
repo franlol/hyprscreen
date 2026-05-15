@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
@@ -1773,7 +1774,6 @@ fn copy_preview_to_clipboard(path: &Option<PathBuf>) -> anyhow::Result<()> {
         .take()
         .ok_or_else(|| anyhow::anyhow!("failed to open wl-copy stdin"))?;
     let bytes = std::fs::read(path)?;
-    use std::io::Write;
     stdin.write_all(&bytes)?;
     drop(stdin);
 
