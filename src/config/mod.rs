@@ -16,8 +16,15 @@ pub enum DefaultTarget {
     Monitor,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum DockStyle {
+    Glass,
+    Solid,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
+    pub dock_style: DockStyle,
     pub default_mode: DefaultMode,
     pub default_target: DefaultTarget,
     pub show_recording_hud: bool,
@@ -37,6 +44,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            dock_style: DockStyle::Glass,
             default_mode: DefaultMode::Screenshot,
             default_target: DefaultTarget::Area,
             show_recording_hud: true,
@@ -77,6 +85,7 @@ fn load() -> AppConfig {
         .collect::<HashMap<_, _>>();
 
     AppConfig {
+        dock_style: parse_dock_style(pairs.get("dock_style")).unwrap_or(defaults.dock_style),
         default_mode: parse_default_mode(pairs.get("default_mode"))
             .unwrap_or(defaults.default_mode),
         default_target: parse_default_target(pairs.get("default_target"))
@@ -152,6 +161,14 @@ fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn parse_dock_style(value: Option<&String>) -> Option<DockStyle> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "glass" => Some(DockStyle::Glass),
+        "solid" => Some(DockStyle::Solid),
+        _ => None,
+    }
 }
 
 fn parse_default_mode(value: Option<&String>) -> Option<DefaultMode> {

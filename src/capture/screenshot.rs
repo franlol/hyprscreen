@@ -12,9 +12,9 @@ pub fn select_area() -> Result<String> {
     let guard = super::CompositorRepaintGuard::arm();
     let output = Command::new("slurp")
         .args([
-            "-b", "#00000088",
-            "-c", "#e8eefcff",
-            "-s", "#00000000",
+            "-b", "#06080c6b",
+            "-c", "#5ee6d0ff",
+            "-s", "#5ee6d01a",
             "-w", "3",
             "-d",
         ])
@@ -49,9 +49,9 @@ pub fn select_window() -> Result<String> {
     let mut child = Command::new("slurp")
         .args([
             "-r",
-            "-b", "#00000088",
-            "-c", "#e8eefcff",
-            "-s", "#00000000",
+            "-b", "#06080c6b",
+            "-c", "#5ee6d0ff",
+            "-s", "#5ee6d01a",
             "-w", "3",
         ])
         .stdin(Stdio::piped())
@@ -159,9 +159,9 @@ fn select_monitor_geometry(monitors: &[crate::hyprland::Monitor]) -> Result<Stri
     let mut child = Command::new("slurp")
         .args([
             "-r",
-            "-b", "#00000088",
-            "-c", "#e8eefcff",
-            "-s", "#00000000",
+            "-b", "#06080c6b",
+            "-c", "#5ee6d0ff",
+            "-s", "#5ee6d01a",
             "-w", "8",
         ])
         .stdin(Stdio::piped())

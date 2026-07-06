@@ -8,6 +8,7 @@
 
 ## Current Keys
 
+- `dock_style`
 - `default_mode`
 - `default_target`
 - `show_recording_hud`
@@ -24,6 +25,7 @@
 ## Current Behavior
 
 - Missing config falls back to internal defaults.
+- `dock_style` chooses between `glass` (translucent + Hyprland blur, default) and `solid` (opaque `#14151B`) surfaces (ADR-0011).
 - `default_mode` and `default_target` define the initial UI selection.
 - `show_recording_hud` defines the default state of the recording HUD switch.
 - The recording indicator cadence is controlled by `recording_indicator_enabled`, `recording_indicator_interval_seconds`, and `recording_indicator_duration_ms`.
@@ -37,6 +39,7 @@
 
 ```ini
 # General
+dock_style=glass
 default_mode=screenshot
 default_target=area
 

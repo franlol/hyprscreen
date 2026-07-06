@@ -20,9 +20,9 @@
 - HUD-off recording still provides a minimal visual reminder through a 300ms red flash every 5s on the target monitor.
 - The recording HUD should keep the red dot semantics visible without turning the whole HUD red.
 - The recording HUD should read as a compact control bar: red dot accent, neutral `REC` label, readable timer, and clear `Stop` affordance.
-- Keep selection visuals semantically distinct:
-  - screenshots use cold white
-  - recordings use red
+- Keep selection visuals semantically distinct (ADR-0011 v2 accents):
+  - screenshots use teal `#5EE6D0`
+  - recordings use coral `#FF5D5D`
 - `Window` and `Monitor` selection should preserve the same visual language as the active mode.
 
 ## GTK4 Implementation Notes
@@ -53,11 +53,14 @@ GTK4's embedded theme CSS sets `button { min-height: 24px; padding: 4px 9px; }` 
 the theme's own class selectors can still lose. Use `!important` on `min-height` and `padding` to
 guarantee the override regardless of specificity.
 
-### Window background must be solid
+### Window background must be explicit
 
 On Hyprland without an explicit background color, GTK4 windows default to transparent — the
-compositor renders through them. Always set `window { background: #<solid>; }` in app CSS.
-Current value: `#16181E` (design token `--hs-surface-solid`).
+compositor renders through them. Always set an explicit `window { background: …; }` in app CSS:
+either the solid surface `#14151B` (token `--d-bg-solid`) or the deliberate glass translucency
+`rgba(19,20,26,0.72)` via the `hs-glass` window class (ADR-0011). Glass windows additionally call
+`hyprland::make_window_glass()` so Hyprland provides blur, shadow, and corner rounding; with
+`dock_style = solid` the app stays fully opaque and skips those setprops.
 
 ### Monitor identifier overlays
 

@@ -199,11 +199,11 @@ fn select_recording_area_geometry() -> Result<String> {
     let output = Command::new("slurp")
         .args([
             "-b",
-            "#00000088",
+            "#06080c6b",
             "-c",
-            "#ff4d4dff",
+            "#ff5d5dff",
             "-s",
-            "#00000000",
+            "#ff5d5d1a",
             "-w",
             "3",
             "-d",
@@ -271,11 +271,11 @@ fn select_recording_window_geometry(choices: &[String]) -> Result<String> {
         .args([
             "-r",
             "-b",
-            "#00000088",
+            "#06080c6b",
             "-c",
-            "#ff4d4dff",
+            "#ff5d5dff",
             "-s",
-            "#00000000",
+            "#ff5d5d1a",
             "-w",
             "3",
         ])
@@ -330,11 +330,11 @@ fn select_recording_monitor_geometry(monitors: &[crate::hyprland::Monitor]) -> R
         .args([
             "-r",
             "-b",
-            "#00000088",
+            "#06080c6b",
             "-c",
-            "#ff4d4dff",
+            "#ff5d5dff",
             "-s",
-            "#00000000",
+            "#ff5d5d1a",
             "-w",
             "8",
         ])

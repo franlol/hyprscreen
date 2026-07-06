@@ -22,8 +22,8 @@
 
 ## Selection Styling
 
-- Screenshot mode uses the cold white selection style for `Area`, `Window`, and `Monitor`.
-- Recording mode uses the red selection style for `Area` and `Monitor`.
+- Screenshot mode uses the teal (`#5EE6D0`) selection style for `Area`, `Window`, and `Monitor` (ADR-0011).
+- Recording mode uses the coral (`#FF5D5D`) selection style for `Area` and `Monitor` (ADR-0011).
 - `Window` and `Monitor` targets use `slurp -r` with predefined rectangles inside a dimmed full-screen overlay.
 - `Area` and `Window` use `slurp -w 3`; `Monitor` uses `slurp -w 6` so the full-screen rectangle outlines read at scale.
 - `Area` selection uses `slurp -d` to display live drag dimensions.
@@ -31,7 +31,7 @@
 ## Screenshot Monitor Notes
 
 - `Screenshot -> Monitor` uses `slurp -r` with monitor rectangles.
-- It follows the screenshot visual style rather than the red recording style.
+- It follows the screenshot visual style rather than the coral recording style.
 - The chosen monitor is captured with `grim -o`.
 - Identifier overlays render the Hyprland connector name on each screen during selection (see `docs/scopes/ui.md` and ADR-0008).
 

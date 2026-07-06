@@ -86,7 +86,16 @@ pub fn build(
         .resizable(false)
         .build();
     window.set_decorated(false);
-    window.connect_map(|_| crate::hyprland::float_window_once());
+    let glass = crate::config::get().dock_style == crate::config::DockStyle::Glass;
+    if glass {
+        window.add_css_class("hs-glass");
+    }
+    window.connect_map(move |_| {
+        crate::hyprland::float_window_once();
+        if glass {
+            crate::hyprland::make_window_glass("Hyprscreen", 18);
+        }
+    });
 
     let stack = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
@@ -1870,7 +1879,7 @@ fn set_primary_button_content(button: &gtk::Button, mode: Mode) {
         .valign(gtk::Align::Center)
         .build();
     let icon: gtk::Widget = match mode {
-        Mode::Screenshot => icon_image("shutter", 16, None).upcast(),
+        Mode::Screenshot => icon_image_colored("shutter", 16, None, "#06231F").upcast(),
         Mode::Record => gtk::Box::builder()
             .css_classes(["hs-primary-pulse"])
             .valign(gtk::Align::Center)
@@ -1890,7 +1899,19 @@ fn set_primary_button_content(button: &gtk::Button, mode: Mode) {
 }
 
 fn icon_image(icon_key: &str, size: i32, css_class: Option<&str>) -> gtk::Image {
-    let bytes = glib::Bytes::from_static(icon_bytes(icon_key));
+    icon_image_colored(icon_key, size, css_class, "#EDEEF2")
+}
+
+// v2 icons are authored with stroke="currentColor"; librsvg has no CSS context
+// here, so the color is baked in before rasterization.
+fn icon_image_colored(
+    icon_key: &str,
+    size: i32,
+    css_class: Option<&str>,
+    color: &str,
+) -> gtk::Image {
+    let svg = String::from_utf8_lossy(icon_bytes(icon_key)).replace("currentColor", color);
+    let bytes = glib::Bytes::from_owned(svg.into_bytes());
     let stream = gio::MemoryInputStream::from_bytes(&bytes);
     let render = size * 2;
     let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream_at_scale(

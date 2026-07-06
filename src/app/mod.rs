@@ -29,16 +29,42 @@ fn load_css() {
     );
 }
 
+/* v2 design tokens (docs/adr/0011). GTK CSS has no var(); values are literal.
+   --d-bg          rgba(19,20,26,0.72)   translucent surface (glass)
+   --d-bg-solid    #14151B               solid surface fallback
+   --d-elevated    rgba(30,32,40,0.86)   popovers / toasts
+   --d-fill        rgba(255,255,255,0.05)
+   --d-fill-hover  rgba(255,255,255,0.09)
+   --d-border      rgba(255,255,255,0.10)
+   --d-border-strong rgba(255,255,255,0.18)
+   --d-text  #EDEEF2   --d-muted #9A9CA6   --d-dim #62646E
+   shot accent: #5EE6D0  soft rgba(94,230,208,0.16)  fg #06231F
+   rec  accent: #FF5D5D  soft rgba(255,93,93,0.16)   fg #2A0808
+   saved/ok: #6FD79E */
 const CSS: &str = r#"
 window {
-    background: #16181E;
-    color: #E8E9EC;
+    background: #14151B;
+    color: #EDEEF2;
     font-family: Cantarell, "Inter Tight", "Segoe UI", sans-serif;
+}
+
+window.hs-glass {
+    background: rgba(19, 20, 26, 0.72);
 }
 
 window.hs-rec-indicator,
 window.hs-rec-indicator > * {
     background: transparent;
+}
+
+tooltip {
+    background: #14151B;
+    color: #EDEEF2;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 6px;
+    font-family: "JetBrains Mono", "Fira Mono", monospace;
+    font-size: 10.5px;
+    font-weight: 500;
 }
 
 button {
@@ -55,51 +81,53 @@ button {
 }
 
 .hs-seg {
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.22);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 10px;
     padding: 3px;
 }
 
 .hs-seg > button {
     border: none;
     background: transparent;
-    border-radius: 6px;
+    border-radius: 7px;
     padding: 7px 0;
     min-height: 0;
+    transition: all 130ms;
 }
 
 .hs-seg > button:hover {
-    color: #E8E9EC;
+    color: #EDEEF2;
 }
 
 .hs-seg > button:checked {
     background: rgba(255, 255, 255, 0.06);
-    box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset, 0 1px 2px rgba(0,0,0,0.25);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.18) inset;
 }
 
 .hs-seg-label {
-    color: #8B8D95;
+    color: #9A9CA6;
     font-size: 12.5px;
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: 0.02em;
 }
 
 .hs-seg > button:hover .hs-seg-label,
 .hs-seg > button:checked .hs-seg-label {
-    color: #E8E9EC;
+    color: #EDEEF2;
 }
 
 .hs-tbtn {
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 11px;
     padding: 0;
     min-height: 0;
+    transition: all 130ms;
 }
 
 .hs-tbtn:hover {
-    background: rgba(255,255,255,0.05);
+    background: rgba(255,255,255,0.09);
     border-color: rgba(255,255,255,0.14);
 }
 
@@ -108,35 +136,34 @@ button {
 }
 
 .hs-tbtn:checked {
-    border-color: rgba(255,255,255,0.22);
-    background: rgba(255,255,255,0.07);
-    box-shadow: 0 0 0 1px rgba(255,255,255,0.04) inset;
+    border-color: rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.05);
 }
 
 .hs-tbtn.mode-rec:checked {
-    border-color: rgba(229,72,77,0.55);
-    background: rgba(229,72,77,0.16);
+    border-color: rgba(255,93,93,0.55);
+    background: rgba(255,93,93,0.16);
 }
 
 .hs-tbtn.mode-shot:checked {
-    border-color: rgba(229,236,245,0.45);
-    background: rgba(229,236,245,0.16);
+    border-color: rgba(94,230,208,0.45);
+    background: rgba(94,230,208,0.16);
 }
 
 .hs-tbtn-label {
-    color: #8B8D95;
+    color: #9A9CA6;
     font-size: 12px;
     font-weight: 500;
     line-height: 1;
 }
 
 .hs-tbtn-icon {
-    opacity: 0.5;
+    opacity: 0.55;
 }
 
 .hs-tbtn:hover .hs-tbtn-label,
 .hs-tbtn:checked .hs-tbtn-label {
-    color: #E8E9EC;
+    color: #EDEEF2;
 }
 
 .hs-tbtn:hover .hs-tbtn-icon,
@@ -146,28 +173,29 @@ button {
 
 .hs-primary {
     border: none;
-    border-radius: 8px;
+    border-radius: 13px;
     padding: 13px 16px;
     min-height: 0;
+    transition: all 120ms;
 }
 
 .hs-primary.mode-shot {
-    background: #E5ECF5;
-    color: #0E1116;
+    background: #5EE6D0;
+    color: #06231F;
 }
 
 .hs-primary.mode-rec {
-    background: #E5484D;
-    color: #FFFFFF;
+    background: #FF5D5D;
+    color: #2A0808;
 }
 
 .hs-primary:hover {
-    filter: brightness(1.06);
+    filter: brightness(1.07);
 }
 
 .hs-primary:active {
     transform: translateY(1px);
-    filter: brightness(0.94);
+    filter: brightness(0.95);
 }
 
 .hs-primary:disabled {
@@ -175,25 +203,25 @@ button {
 }
 
 .hs-primary-label {
-    font-size: 13.5px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 700;
     letter-spacing: 0.01em;
 }
 
 .hs-primary-pulse {
     min-width: 8px;
     min-height: 8px;
-    background: #FFFFFF;
+    background: #2A0808;
     border-radius: 999px;
-    box-shadow: 0 0 0 0 rgba(255,255,255,0.5);
+    box-shadow: 0 0 0 0 rgba(42,8,8,0.5);
     animation: hsPulse 1.4s ease-out infinite;
 }
 
 
 @keyframes hsPulse {
-    0% { box-shadow: 0 0 0 0 rgba(255,255,255,0.5); }
-    70% { box-shadow: 0 0 0 8px rgba(255,255,255,0); }
-    100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+    0% { box-shadow: 0 0 0 0 rgba(42,8,8,0.45); }
+    70% { box-shadow: 0 0 0 8px rgba(42,8,8,0); }
+    100% { box-shadow: 0 0 0 0 rgba(42,8,8,0); }
 }
 
 .hs-optrow {
@@ -201,14 +229,14 @@ button {
 }
 
 .hs-opt-label {
-    color: #8B8D95;
+    color: #9A9CA6;
     font-size: 11.5px;
     font-weight: 500;
     letter-spacing: 0.01em;
 }
 
 .hs-opt-hint {
-    color: #5C5E66;
+    color: #62646E;
     font-family: "JetBrains Mono", "Fira Mono", monospace;
     font-size: 10.5px;
     font-weight: 500;
@@ -218,42 +246,43 @@ button {
 .hs-opt-dot {
     min-width: 6px;
     min-height: 6px;
-    background: #5C5E66;
+    background: #62646E;
     border-radius: 999px;
 }
 
 .hs-optrow.is-on .hs-opt-dot {
-    background: #E5484D;
-    box-shadow: 0 0 6px 1px rgba(229,72,77,0.45);
+    background: #FF5D5D;
+    box-shadow: 0 0 6px 1px rgba(255,93,93,0.45);
 }
 
 .hs-switch {
-    min-width: 34px;
-    min-height: 18px;
-    padding: 2px;
+    min-width: 38px;
+    min-height: 22px;
+    padding: 1px;
     border-radius: 999px;
-    border: 1px solid rgba(255,255,255,0.08);
-    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.08);
     outline: none;
     box-shadow: none;
+    transition: background 140ms, border-color 140ms;
 }
 
 .hs-switch:checked {
-    background: rgba(229,72,77,0.16);
-    border-color: rgba(229,72,77,0.55);
+    background: rgba(255,93,93,0.16);
+    border-color: #FF5D5D;
 }
 
 .hs-switch slider {
-    min-width: 12px;
-    min-height: 12px;
+    min-width: 18px;
+    min-height: 18px;
     border-radius: 999px;
-    background: rgba(255,255,255,0.55);
+    background: #C7C8CC;
     border: none;
-    box-shadow: none;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.4);
 }
 
 .hs-switch:checked slider {
-    background: #E5484D;
+    background: #FF5D5D;
 }
 
 .hs-status {
@@ -261,16 +290,16 @@ button {
     font-size: 11.5px;
     font-weight: 500;
     letter-spacing: 0.02em;
-    color: #5C5E66;
+    color: #62646E;
     min-height: 14px;
 }
 
-.hs-status.err { color: #F0848A; }
-.hs-status.ok { color: #7FCB9B; }
-.hs-status.live { color: #E5ECF5; }
+.hs-status.err { color: #FF5D5D; }
+.hs-status.ok { color: #6FD79E; }
+.hs-status.live { color: #5EE6D0; }
 
 .hs-meta {
-    color: #8B8D95;
+    color: #9A9CA6;
     font-family: "JetBrains Mono", "Fira Mono", monospace;
     font-size: 11px;
     font-weight: 500;
@@ -279,20 +308,21 @@ button {
 
 .hs-preview-frame {
     background: #0C0D11;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: 10px;
 }
 
 .hs-abtn {
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 7px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 9px;
     padding: 9px 4px 8px 4px;
     min-height: 0;
+    transition: all 120ms;
 }
 
 .hs-abtn:hover {
-    background: rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.09);
     border-color: rgba(255,255,255,0.14);
 }
 
@@ -305,7 +335,7 @@ button {
 }
 
 .hs-abtn-label {
-    color: #E8E9EC;
+    color: #EDEEF2;
     font-size: 10.5px;
     font-weight: 500;
     letter-spacing: 0.02em;
@@ -313,23 +343,24 @@ button {
 }
 
 .hs-abtn.is-primary {
-    background: rgba(229,236,245,0.10);
-    border-color: rgba(229,236,245,0.30);
+    background: rgba(94,230,208,0.16);
+    border-color: rgba(94,230,208,0.42);
 }
 
 .hs-abtn.is-primary.mode-rec {
-    background: rgba(229,72,77,0.16);
-    border-color: rgba(229,72,77,0.42);
+    background: rgba(255,93,93,0.16);
+    border-color: rgba(255,93,93,0.42);
 }
 
 .hs-hud {
-    background: rgba(18, 19, 24, 0.82);
+    background: rgba(19, 20, 26, 0.72);
     border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 999px;
     padding: 8px 10px 8px 14px;
 }
 
 .hs-hud-dot {
-    background: #E5484D;
+    background: #FF5D5D;
     border-radius: 999px;
     min-width: 9px;
     min-height: 9px;
@@ -337,40 +368,40 @@ button {
 }
 
 @keyframes hudPulse {
-    0% { box-shadow: 0 0 0 0 rgba(229,72,77,0.55); }
-    70% { box-shadow: 0 0 0 7px rgba(229,72,77,0); }
-    100% { box-shadow: 0 0 0 0 rgba(229,72,77,0); }
+    0% { box-shadow: 0 0 0 0 rgba(255,93,93,0.55); }
+    70% { box-shadow: 0 0 0 7px rgba(255,93,93,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,93,93,0); }
 }
 
 .hs-hud-rec {
-    color: #8B8D95;
-    font-size: 10.5px;
+    color: #9A9CA6;
+    font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.14em;
 }
 
 .hs-hud-timer {
-    color: #E8E9EC;
+    color: #EDEEF2;
     font-family: "JetBrains Mono", "Fira Mono", monospace;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: 0.02em;
 }
 
 .hs-hud-sep {
-    background: rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.10);
     min-width: 1px;
     min-height: 16px;
 }
 
 .hs-hud-stop {
     border: none;
-    background: #E5484D;
+    background: #FF5D5D;
     color: #FFFFFF;
     border-radius: 999px;
-    padding: 7px 12px;
+    padding: 7px 13px;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 700;
     letter-spacing: 0.04em;
     min-height: 0;
 }
@@ -380,13 +411,13 @@ button {
 }
 
 window.hs-mon-id {
-    background: #0E1116;
+    background: #14151B;
     border: 2px solid rgba(255, 255, 255, 0.10);
     border-radius: 14px;
 }
 
 .hs-mon-id-label {
-    color: #E8E9EC;
+    color: #EDEEF2;
     font-family: "JetBrains Mono", "Fira Mono", monospace;
     font-size: 32px;
     font-weight: 600;
@@ -395,7 +426,7 @@ window.hs-mon-id {
 }
 
 label.hs-rec-flash {
-    color: #E5484D;
+    color: #FF5D5D;
     font-size: 14px;
     font-weight: 700;
     background: transparent;
@@ -403,10 +434,10 @@ label.hs-rec-flash {
 
 
 /* ── Tinted target-button labels in checked state ── */
-.hs-tbtn.mode-rec:checked  .hs-tbtn-label { color: #FBD5D6; }
-.hs-tbtn.mode-shot:checked .hs-tbtn-label { color: #E5ECF5; }
+.hs-tbtn.mode-rec:checked  .hs-tbtn-label { color: #FF5D5D; }
+.hs-tbtn.mode-shot:checked .hs-tbtn-label { color: #5EE6D0; }
 
 /* ── Primary action-button (Save) accent label ── */
-.hs-abtn.is-primary          .hs-abtn-label { color: #E5ECF5; }
-.hs-abtn.is-primary.mode-rec .hs-abtn-label { color: #FBD5D6; }
+.hs-abtn.is-primary          .hs-abtn-label { color: #5EE6D0; }
+.hs-abtn.is-primary.mode-rec .hs-abtn-label { color: #FF5D5D; }
 "#;

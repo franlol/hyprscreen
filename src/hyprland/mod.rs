@@ -19,6 +19,7 @@ pub struct Monitor {
     pub y: i32,
     pub width: i32,
     pub height: i32,
+    pub focused: bool,
 }
 
 #[derive(Deserialize)]
@@ -30,6 +31,8 @@ struct MonitorInfoRaw {
     width: i32,
     height: i32,
     scale: f64,
+    #[serde(default)]
+    focused: bool,
 }
 
 pub fn enumerate_monitors() -> Vec<Monitor> {
@@ -51,8 +54,19 @@ pub fn enumerate_monitors() -> Vec<Monitor> {
             y: m.y,
             width: ((m.width as f64) / m.scale).round() as i32,
             height: ((m.height as f64) / m.scale).round() as i32,
+            focused: m.focused,
         })
         .collect()
+}
+
+/// The monitor holding keyboard focus, falling back to the first enumerated one.
+pub fn focused_monitor() -> Option<Monitor> {
+    let monitors = enumerate_monitors();
+    monitors
+        .iter()
+        .find(|m| m.focused)
+        .cloned()
+        .or_else(|| monitors.into_iter().next())
 }
 
 fn is_hyprland_session() -> bool {
@@ -158,6 +172,30 @@ pub fn make_window_plain(window_match: &str) {
                 dispatch_setprop(&selector, "no_blur", "1");
                 dispatch_setprop(&selector, "no_shadow", "1");
                 dispatch_setprop(&selector, "rounding", "0");
+                dispatch_setprop(&selector, "no_anim", "1");
+            }
+        });
+    }
+}
+
+/// Like `make_window_plain`, but leaves Hyprland's blur and shadow on and asks
+/// for rounded corners, so a translucent window renders as a glass panel
+/// (ADR-0011). Requires `decoration:blur` enabled in Hyprland; without it the
+/// window degrades to a flat translucent panel.
+pub fn make_window_glass(window_match: &str, rounding: u32) {
+    if !is_hyprland_session() {
+        return;
+    }
+
+    for delay in [40_u64, 90_u64, 160_u64] {
+        let title = window_match.to_string();
+        glib::timeout_add_local_once(Duration::from_millis(delay), move || {
+            if let Some(selector) = selector_for_title(&title) {
+                dispatch_setprop(&selector, "decorate", "0");
+                dispatch_setprop(&selector, "border_size", "0");
+                dispatch_setprop(&selector, "no_blur", "0");
+                dispatch_setprop(&selector, "no_shadow", "0");
+                dispatch_setprop(&selector, "rounding", &rounding.to_string());
                 dispatch_setprop(&selector, "no_anim", "1");
             }
         });
