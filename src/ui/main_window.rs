@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -56,6 +56,8 @@ struct LastAction {
     mode: Mode,
     target: Target,
     show_recording_hud: bool,
+    delay_secs: u64,
+    pointer: bool,
 }
 
 struct ActiveRecording {
@@ -82,24 +84,20 @@ pub fn build(
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("Hyprscreen")
-        .default_width(WINDOW_WIDTH)
         .resizable(false)
         .build();
     window.set_decorated(false);
-    let glass = crate::config::get().dock_style == crate::config::DockStyle::Glass;
-    if glass {
+    if crate::config::get().dock_style == crate::config::DockStyle::Glass {
         window.add_css_class("hs-glass");
     }
-    window.connect_map(move |_| {
-        crate::hyprland::float_window_once();
-        if glass {
-            crate::hyprland::make_window_glass("Hyprscreen", 18);
-        }
+    window.connect_map(move |w| {
+        crate::hyprland::make_window_glass("Hyprscreen", 18);
+        position_dock(w);
     });
 
     let stack = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
-        .hhomogeneous(true)
+        .hhomogeneous(false)
         .vhomogeneous(false)
         .build();
 
@@ -223,125 +221,278 @@ fn build_setup_page(
     startup: Option<crate::cli::StartupAction>,
 ) -> gtk::Widget {
     let config = crate::config::get();
-
     let default_is_record = config.default_mode == crate::config::DefaultMode::Record;
 
-    let body = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
-        .css_classes(["hs-body"])
+    let delay_secs = Rc::new(Cell::new(0_u64));
+
+    window.add_css_class(if default_is_record {
+        "hs-mode-rec"
+    } else {
+        "hs-mode-shot"
+    });
+
+    // ── Dock bar ───────────────────────────────────────────────
+    let dock = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .css_classes(["hs-dock"])
         .build();
 
-    // ── Mode segmented toggle ──────────────────────────────────
+    // Mode segment: Shot / Rec
     let seg = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(4)
-        .homogeneous(true)
-        .css_classes(["hs-seg"])
+        .spacing(3)
+        .valign(gtk::Align::Center)
+        .css_classes(["hs-dseg"])
         .build();
 
-    let screenshot_button = gtk::ToggleButton::new();
+    let (screenshot_button, shot_seg_icon) = make_seg_button("Shot", "shot", "hs-seg-shot");
     screenshot_button.set_active(!default_is_record);
-    let shot_seg_label = gtk::Label::builder()
-        .label("Screenshot")
-        .css_classes(["hs-seg-label"])
-        .build();
-    screenshot_button.set_child(Some(&shot_seg_label));
-
-    let record_button = gtk::ToggleButton::new();
+    let (record_button, rec_seg_icon) = make_seg_button("Rec", "rec", "hs-seg-rec");
     record_button.set_active(default_is_record);
-    let rec_seg_label = gtk::Label::builder()
-        .label("Record")
-        .css_classes(["hs-seg-label"])
-        .build();
-    record_button.set_child(Some(&rec_seg_label));
-
     seg.append(&screenshot_button);
     seg.append(&record_button);
-
-    // ── Target row ─────────────────────────────────────────────
-    let target_row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .homogeneous(true)
-        .build();
-
-    let initial_mode_class = if default_is_record {
-        "mode-rec"
+    if default_is_record {
+        rec_seg_icon.set_paintable(Some(&icon_texture("rec", 15, "#FF5D5D")));
     } else {
-        "mode-shot"
-    };
+        shot_seg_icon.set_paintable(Some(&icon_texture("shot", 15, "#5EE6D0")));
+    }
 
-    let area_button = make_target_button("Area", "area", initial_mode_class);
+    // Targets
+    let area_button = make_dock_target("area", "Area · drag a region");
     area_button.set_active(config.default_target == crate::config::DefaultTarget::Area);
-
-    let window_button = make_target_button("Window", "window", initial_mode_class);
+    let window_button = make_dock_target("window", "Window · pick a window");
     window_button.set_active(config.default_target == crate::config::DefaultTarget::Window);
-
-    let monitor_button = make_target_button("Monitor", "monitor", initial_mode_class);
+    let monitor_button = make_dock_target("monitor", "Monitor · whole display");
     monitor_button.set_active(config.default_target == crate::config::DefaultTarget::Monitor);
 
-    target_row.append(&area_button);
-    target_row.append(&window_button);
-    target_row.append(&monitor_button);
+    let target_group = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(4)
+        .valign(gtk::Align::Center)
+        .build();
+    target_group.append(&area_button);
+    target_group.append(&window_button);
+    target_group.append(&monitor_button);
 
+    // Delay chip — click cycles presets, popover mirrors it
+    let delay_chip = gtk::Button::builder()
+        .css_classes(["hs-dchip"])
+        .valign(gtk::Align::Center)
+        .build();
+    delay_chip.set_can_focus(false);
+    let chip_inner = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(7)
+        .build();
+    let chip_icon = icon_image_colored("timer", 16, None, "#9A9CA6");
+    let chip_label = gtk::Label::builder()
+        .label("No delay")
+        .css_classes(["hs-dchip-label"])
+        .build();
+    chip_inner.append(&chip_icon);
+    chip_inner.append(&chip_label);
+    delay_chip.set_child(Some(&chip_inner));
+
+    // Pointer toggle (screenshots only — wf-recorder always records the cursor)
+    let pointer_button = make_dock_target("pointer", "Pointer: on");
+    pointer_button.set_active(true);
+    pointer_button.connect_toggled(|btn| {
+        btn.set_tooltip_text(Some(if btn.is_active() {
+            "Pointer: on"
+        } else {
+            "Pointer: off"
+        }));
+    });
+
+    // Quick settings popover
+    let more = gtk::MenuButton::builder()
+        .css_classes(["hs-dmore"])
+        .direction(gtk::ArrowType::Up)
+        .valign(gtk::Align::Center)
+        .build();
+    more.set_can_focus(false);
+    more.set_child(Some(&icon_image("chevron", 18, Some("hs-dico-icon"))));
+
+    let qpop = gtk::Popover::builder().css_classes(["hs-qpop"]).build();
+    qpop.add_css_class(if default_is_record {
+        "hs-mode-rec"
+    } else {
+        "hs-mode-shot"
+    });
+
+    let qbody = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(14)
+        .width_request(252)
+        .build();
+
+    // Delay presets row
+    let delay_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .build();
+    let delay_header = gtk::Label::builder()
+        .label("DELAY")
+        .halign(gtk::Align::Start)
+        .css_classes(["hs-qlabel"])
+        .build();
+    let qseg = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(3)
+        .homogeneous(true)
+        .css_classes(["hs-qseg"])
+        .build();
+    let delay_presets: [(u64, &str); 4] = [(0, "Now"), (3, "3s"), (5, "5s"), (10, "10s")];
+    let delay_buttons: Vec<gtk::ToggleButton> = delay_presets
+        .iter()
+        .map(|(_, text)| {
+            let b = gtk::ToggleButton::builder()
+                .label(*text)
+                .css_classes(["hs-qseg-btn"])
+                .build();
+            b.set_can_focus(false);
+            qseg.append(&b);
+            b
+        })
+        .collect();
+    delay_buttons[0].set_active(true);
+    delay_row.append(&delay_header);
+    delay_row.append(&qseg);
+
+    // Applies a delay value everywhere: shared state, chip, preset buttons.
+    let apply_delay = {
+        let delay_secs = delay_secs.clone();
+        let chip_label = chip_label.clone();
+        let delay_chip = delay_chip.clone();
+        let delay_buttons = delay_buttons.clone();
+        Rc::new(move |value: u64| {
+            delay_secs.set(value);
+            if value == 0 {
+                chip_label.set_label("No delay");
+                delay_chip.remove_css_class("on");
+            } else {
+                chip_label.set_label(&format!("{value}s"));
+                delay_chip.add_css_class("on");
+            }
+            for (button, (preset, _)) in delay_buttons.iter().zip(delay_presets.iter()) {
+                button.set_active(*preset == value);
+            }
+        })
+    };
+
+    for (button, (preset, _)) in delay_buttons.iter().zip(delay_presets.iter()) {
+        let apply_delay = apply_delay.clone();
+        let preset = *preset;
+        let delay_secs_for_toggle = delay_secs.clone();
+        button.connect_toggled(move |b| {
+            if b.is_active() {
+                if delay_secs_for_toggle.get() != preset {
+                    apply_delay(preset);
+                }
+            } else if delay_secs_for_toggle.get() == preset {
+                // Never leave the preset row empty.
+                b.set_active(true);
+            }
+        });
+    }
+
+    delay_chip.connect_clicked({
+        let apply_delay = apply_delay.clone();
+        let delay_secs = delay_secs.clone();
+        move |_| {
+            let next = match delay_secs.get() {
+                0 => 3,
+                3 => 5,
+                5 => 10,
+                _ => 0,
+            };
+            apply_delay(next);
+        }
+    });
+
+    // Pointer row
+    let pointer_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .build();
+    let pointer_text = quick_setting_text("Show pointer", "include cursor in capture");
+    let pointer_switch = gtk::Switch::builder()
+        .active(true)
+        .halign(gtk::Align::End)
+        .hexpand(true)
+        .valign(gtk::Align::Center)
+        .css_classes(["hs-switch"])
+        .build();
+    pointer_row.append(&pointer_text);
+    pointer_row.append(&pointer_switch);
+
+    // Keep the dock toggle and the popover switch in lockstep.
+    pointer_switch.connect_active_notify(glib::clone!(
+        #[weak]
+        pointer_button,
+        move |switch| {
+            if pointer_button.is_active() != switch.is_active() {
+                pointer_button.set_active(switch.is_active());
+            }
+        }
+    ));
+    pointer_button.connect_toggled(glib::clone!(
+        #[weak]
+        pointer_switch,
+        move |btn| {
+            if pointer_switch.is_active() != btn.is_active() {
+                pointer_switch.set_active(btn.is_active());
+            }
+        }
+    ));
+
+    // Recording HUD row (record mode only)
     let hud_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(10)
-        .halign(gtk::Align::Fill)
-        .css_classes(["hs-optrow"])
         .build();
-    if *show_recording_hud.borrow() {
-        hud_row.add_css_class("is-on");
-    }
-
-    let hud_label = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(7)
-        .valign(gtk::Align::Center)
-        .css_classes(["hs-opt-label"])
-        .build();
-    let hud_dot = gtk::Box::builder()
-        .css_classes(["hs-opt-dot"])
-        .valign(gtk::Align::Center)
-        .build();
-    let hud_text = gtk::Label::builder()
-        .label("Show HUD while recording")
-        .build();
-    hud_label.append(&hud_dot);
-    hud_label.append(&hud_text);
-
-    let hud_right = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(10)
-        .halign(gtk::Align::End)
-        .valign(gtk::Align::Center)
-        .hexpand(true)
-        .build();
-    let hud_hint = gtk::Label::builder()
-        .label(if *show_recording_hud.borrow() {
-            "on"
-        } else {
-            "flash"
-        })
-        .css_classes(["hs-opt-hint"])
-        .build();
+    let hud_text = quick_setting_text("Recording HUD", "timer + stop while recording");
     let hud_toggle = gtk::Switch::builder()
         .active(*show_recording_hud.borrow())
+        .halign(gtk::Align::End)
+        .hexpand(true)
         .valign(gtk::Align::Center)
         .css_classes(["hs-switch"])
         .build();
     hud_toggle.set_can_focus(false);
-    hud_right.append(&hud_hint);
-    hud_right.append(&hud_toggle);
-    hud_row.append(&hud_label);
-    hud_row.append(&hud_right);
+    hud_row.append(&hud_text);
+    hud_row.append(&hud_toggle);
+    hud_row.set_visible(default_is_record);
 
-    // ── Primary CTA ────────────────────────────────────────────
+    hud_toggle.connect_active_notify(glib::clone!(
+        #[weak]
+        status_label,
+        #[strong]
+        show_recording_hud,
+        move |switch| {
+            let enabled = switch.is_active();
+            *show_recording_hud.borrow_mut() = enabled;
+            if enabled {
+                set_status_neutral(&status_label, "");
+            } else {
+                set_status_stop_hint(&status_label);
+            }
+        }
+    ));
+
+    qbody.append(&delay_row);
+    qbody.append(&pointer_row);
+    qbody.append(&hud_row);
+    qpop.set_child(Some(&qbody));
+    more.set_popover(Some(&qpop));
+
+    // ── Primary fire button ────────────────────────────────────
     let cta_button = gtk::Button::builder()
-        .hexpand(true)
-        .css_classes(["hs-primary"])
+        .css_classes(["hs-primary", "hs-dfire"])
+        .valign(gtk::Align::Center)
         .build();
+    cta_button.set_can_focus(false);
     set_primary_button_content(
         &cta_button,
         if default_is_record {
@@ -350,7 +501,6 @@ fn build_setup_page(
             Mode::Screenshot
         },
     );
-
     if default_is_record {
         cta_button.add_css_class("mode-rec");
     } else {
@@ -367,6 +517,8 @@ fn build_setup_page(
 
     screenshot_button.connect_toggled(glib::clone!(
         #[weak]
+        window,
+        #[weak]
         screenshot_button,
         #[weak]
         record_button,
@@ -375,13 +527,15 @@ fn build_setup_page(
         #[weak]
         status_label,
         #[weak]
-        area_button,
-        #[weak]
-        window_button,
-        #[weak]
-        monitor_button,
-        #[weak]
         hud_row,
+        #[weak]
+        pointer_button,
+        #[weak]
+        qpop,
+        #[weak]
+        shot_seg_icon,
+        #[weak]
+        rec_seg_icon,
         move |_| {
             if !screenshot_button.is_active() && !record_button.is_active() {
                 screenshot_button.set_active(true);
@@ -391,17 +545,27 @@ fn build_setup_page(
                 set_primary_button_content(&cta_button, Mode::Screenshot);
                 cta_button.remove_css_class("mode-rec");
                 cta_button.add_css_class("mode-shot");
-                for btn in [&area_button, &window_button, &monitor_button] {
-                    btn.remove_css_class("mode-rec");
-                    btn.add_css_class("mode-shot");
+                for widget in [window.upcast_ref::<gtk::Widget>(), qpop.upcast_ref()] {
+                    widget.remove_css_class("hs-mode-rec");
+                    widget.add_css_class("hs-mode-shot");
                 }
+                shot_seg_icon.set_paintable(Some(&icon_texture("shot", 15, "#5EE6D0")));
+                rec_seg_icon.set_paintable(Some(&icon_texture("rec", 15, "#9A9CA6")));
                 hud_row.set_visible(false);
+                pointer_button.set_sensitive(true);
+                pointer_button.set_tooltip_text(Some(if pointer_button.is_active() {
+                    "Pointer: on"
+                } else {
+                    "Pointer: off"
+                }));
                 set_status_neutral(&status_label, "");
             }
         }
     ));
 
     record_button.connect_toggled(glib::clone!(
+        #[weak]
+        window,
         #[weak]
         screenshot_button,
         #[weak]
@@ -411,13 +575,15 @@ fn build_setup_page(
         #[weak]
         status_label,
         #[weak]
-        area_button,
-        #[weak]
-        window_button,
-        #[weak]
-        monitor_button,
-        #[weak]
         hud_row,
+        #[weak]
+        pointer_button,
+        #[weak]
+        qpop,
+        #[weak]
+        shot_seg_icon,
+        #[weak]
+        rec_seg_icon,
         move |_| {
             if !screenshot_button.is_active() && !record_button.is_active() {
                 record_button.set_active(true);
@@ -427,35 +593,17 @@ fn build_setup_page(
                 set_primary_button_content(&cta_button, Mode::Record);
                 cta_button.remove_css_class("mode-shot");
                 cta_button.add_css_class("mode-rec");
-                for btn in [&area_button, &window_button, &monitor_button] {
-                    btn.remove_css_class("mode-shot");
-                    btn.add_css_class("mode-rec");
+                for widget in [window.upcast_ref::<gtk::Widget>(), qpop.upcast_ref()] {
+                    widget.remove_css_class("hs-mode-shot");
+                    widget.add_css_class("hs-mode-rec");
                 }
+                shot_seg_icon.set_paintable(Some(&icon_texture("shot", 15, "#9A9CA6")));
+                rec_seg_icon.set_paintable(Some(&icon_texture("rec", 15, "#FF5D5D")));
                 hud_row.set_visible(true);
+                pointer_button.set_sensitive(false);
+                pointer_button
+                    .set_tooltip_text(Some("wf-recorder always records the pointer"));
                 set_status_neutral(&status_label, "");
-            }
-        }
-    ));
-
-    hud_toggle.connect_active_notify(glib::clone!(
-        #[weak]
-        hud_hint,
-        #[weak]
-        hud_row,
-        #[weak]
-        status_label,
-        #[strong]
-        show_recording_hud,
-        move |switch| {
-            let enabled = switch.is_active();
-            *show_recording_hud.borrow_mut() = enabled;
-            hud_hint.set_label(if enabled { "on" } else { "flash" });
-            if enabled {
-                hud_row.add_css_class("is-on");
-                set_status_neutral(&status_label, "");
-            } else {
-                hud_row.remove_css_class("is-on");
-                set_status_stop_hint(&status_label);
             }
         }
     ));
@@ -476,7 +624,7 @@ fn build_setup_page(
         });
     }
 
-    // ── CTA click ──────────────────────────────────────────────
+    // ── Fire ───────────────────────────────────────────────────
     cta_button.connect_clicked(glib::clone!(
         #[weak]
         screenshot_button,
@@ -484,6 +632,8 @@ fn build_setup_page(
         area_button,
         #[weak]
         window_button,
+        #[weak]
+        pointer_button,
         #[weak]
         status_label,
         #[weak]
@@ -516,8 +666,12 @@ fn build_setup_page(
         setup_cta,
         #[strong]
         show_recording_hud,
+        #[strong]
+        delay_secs,
         move |_| {
             let target = active_target(&area_button, &window_button);
+            let delay = delay_secs.get();
+            let pointer = pointer_button.is_active();
 
             if screenshot_button.is_active() {
                 set_status_live(&status_label, &format!("selecting {}...", target.name()));
@@ -525,6 +679,8 @@ fn build_setup_page(
                     mode: Mode::Screenshot,
                     target,
                     show_recording_hud: false,
+                    delay_secs: delay,
+                    pointer,
                 });
                 run_capture_action(
                     &window,
@@ -538,6 +694,8 @@ fn build_setup_page(
                     &reveal_button,
                     &gif_button,
                     target,
+                    delay,
+                    pointer,
                     Some((&cta_button, &status_label)),
                 );
                 return;
@@ -553,6 +711,8 @@ fn build_setup_page(
                 mode: Mode::Record,
                 target,
                 show_recording_hud: show_hud,
+                delay_secs: delay,
+                pointer,
             });
 
             start_recording_action(
@@ -571,18 +731,87 @@ fn build_setup_page(
                 &gif_button,
                 target,
                 show_hud,
+                delay,
                 Some((&cta_button, &status_label)),
             );
         }
     ));
 
-    body.append(&seg);
-    body.append(&target_row);
-    body.append(&hud_row);
-    body.append(&cta_button);
-    body.append(status_label);
+    // ── Keyboard shortcuts (dock only) ─────────────────────────
+    let key_controller = gtk::EventControllerKey::new();
+    key_controller.connect_key_pressed(glib::clone!(
+        #[weak(rename_to = win)]
+        window,
+        #[weak]
+        stack,
+        #[weak]
+        cta_button,
+        #[weak]
+        screenshot_button,
+        #[weak]
+        record_button,
+        #[weak]
+        area_button,
+        #[weak]
+        window_button,
+        #[weak]
+        monitor_button,
+        #[weak]
+        delay_chip,
+        #[weak]
+        pointer_button,
+        #[upgrade_or]
+        glib::Propagation::Proceed,
+        move |_, key, _, _| {
+            if stack.visible_child_name().as_deref() != Some("setup") {
+                return glib::Propagation::Proceed;
+            }
+            match key {
+                gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => {
+                    if cta_button.is_sensitive() {
+                        cta_button.emit_clicked();
+                    }
+                }
+                gtk::gdk::Key::_1 | gtk::gdk::Key::KP_1 => area_button.set_active(true),
+                gtk::gdk::Key::_2 | gtk::gdk::Key::KP_2 => window_button.set_active(true),
+                gtk::gdk::Key::_3 | gtk::gdk::Key::KP_3 => monitor_button.set_active(true),
+                gtk::gdk::Key::s | gtk::gdk::Key::S => screenshot_button.set_active(true),
+                gtk::gdk::Key::r | gtk::gdk::Key::R => record_button.set_active(true),
+                gtk::gdk::Key::d | gtk::gdk::Key::D => delay_chip.emit_clicked(),
+                gtk::gdk::Key::p | gtk::gdk::Key::P => {
+                    if pointer_button.is_sensitive() {
+                        pointer_button.set_active(!pointer_button.is_active());
+                    }
+                }
+                gtk::gdk::Key::Escape => win.close(),
+                _ => return glib::Propagation::Proceed,
+            }
+            glib::Propagation::Stop
+        }
+    ));
+    window.add_controller(key_controller);
 
-    hud_row.set_visible(default_is_record);
+    // ── Assemble ───────────────────────────────────────────────
+    dock.append(&seg);
+    dock.append(&make_dock_divider());
+    dock.append(&target_group);
+    dock.append(&make_dock_divider());
+    dock.append(&delay_chip);
+    dock.append(&pointer_button);
+    dock.append(&more);
+    dock.append(&cta_button);
+
+    let root = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .build();
+    root.append(&dock);
+    // Transitional status line until toast windows land (plan phase 3).
+    status_label.set_halign(gtk::Align::Start);
+    status_label.set_margin_start(14);
+    status_label.set_margin_bottom(8);
+    status_label.set_visible(false);
+    root.append(status_label);
 
     if let Some(action) = startup {
         let screenshot_btn = screenshot_button.clone();
@@ -610,7 +839,112 @@ fn build_setup_page(
         });
     }
 
-    body.upcast()
+    root.upcast()
+}
+
+fn make_seg_button(label_text: &str, icon_key: &str, class: &str) -> (gtk::ToggleButton, gtk::Image) {
+    let btn = gtk::ToggleButton::new();
+    btn.add_css_class("hs-dseg-btn");
+    btn.add_css_class(class);
+    btn.set_can_focus(false);
+
+    let inner = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .build();
+    let icon = icon_image_colored(icon_key, 15, None, "#9A9CA6");
+    let label = gtk::Label::builder()
+        .label(label_text)
+        .css_classes(["hs-dseg-label"])
+        .build();
+    inner.append(&icon);
+    inner.append(&label);
+    btn.set_child(Some(&inner));
+    (btn, icon)
+}
+
+fn make_dock_target(icon_name: &str, tip: &str) -> gtk::ToggleButton {
+    let btn = gtk::ToggleButton::builder()
+        .width_request(40)
+        .height_request(40)
+        .valign(gtk::Align::Center)
+        .css_classes(["hs-dico"])
+        .build();
+    btn.set_can_focus(false);
+    btn.set_tooltip_text(Some(tip));
+
+    let overlay = gtk::Overlay::new();
+    let icon = icon_image(icon_name, 19, Some("hs-dico-icon"));
+    icon.set_halign(gtk::Align::Center);
+    icon.set_valign(gtk::Align::Center);
+    overlay.set_child(Some(&icon));
+
+    // The active-target dot: the design uses ::after, which GTK4 CSS lacks.
+    let dot = gtk::Box::builder()
+        .width_request(4)
+        .height_request(4)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::End)
+        .margin_bottom(5)
+        .css_classes(["hs-dico-dot"])
+        .build();
+    dot.set_visible(false);
+    overlay.add_overlay(&dot);
+    btn.set_child(Some(&overlay));
+
+    btn.connect_toggled(glib::clone!(
+        #[weak]
+        dot,
+        move |b| dot.set_visible(b.is_active())
+    ));
+    btn
+}
+
+fn make_dock_divider() -> gtk::Box {
+    gtk::Box::builder()
+        .width_request(1)
+        .height_request(26)
+        .valign(gtk::Align::Center)
+        .css_classes(["hs-ddiv"])
+        .build()
+}
+
+fn quick_setting_text(name: &str, sub: &str) -> gtk::Box {
+    let text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(3)
+        .valign(gtk::Align::Center)
+        .build();
+    let name_label = gtk::Label::builder()
+        .label(name)
+        .halign(gtk::Align::Start)
+        .css_classes(["hs-qtoggle-name"])
+        .build();
+    let sub_label = gtk::Label::builder()
+        .label(sub)
+        .halign(gtk::Align::Start)
+        .css_classes(["hs-qtoggle-sub"])
+        .build();
+    text.append(&name_label);
+    text.append(&sub_label);
+    text
+}
+
+fn position_dock(window: &gtk::ApplicationWindow) {
+    let window = window.clone();
+    glib::timeout_add_local_once(Duration::from_millis(50), move || {
+        let (w, h) = (window.width(), window.height());
+        if w <= 1 {
+            return;
+        }
+        if let Some(mon) = crate::hyprland::focused_monitor() {
+            let x = mon.x + ((mon.width - w) / 2).max(0);
+            let y = mon.y + (mon.height - h - 34).max(0);
+            crate::hyprland::place_window_exact("Hyprscreen", x, y);
+        }
+    });
 }
 
 fn apply_startup_target(
@@ -649,6 +983,7 @@ fn build_preview_page(
     let body = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(14)
+        .width_request(WINDOW_WIDTH - 36)
         .css_classes(["hs-body"])
         .build();
 
@@ -784,6 +1119,8 @@ fn build_preview_page(
                     &reveal_button,
                     &gif_button,
                     action.target,
+                    action.delay_secs,
+                    action.pointer,
                     None,
                 ),
                 Mode::Record => start_recording_action(
@@ -802,6 +1139,7 @@ fn build_preview_page(
                     &gif_button,
                     action.target,
                     action.show_recording_hud,
+                    action.delay_secs,
                     None,
                 ),
             }
@@ -986,35 +1324,6 @@ fn build_preview_page(
     body.upcast()
 }
 
-fn make_target_button(label_text: &str, icon_name: &str, mode_class: &str) -> gtk::ToggleButton {
-    let btn = gtk::ToggleButton::new();
-    btn.add_css_class("hs-tbtn");
-    btn.add_css_class(mode_class);
-
-    let inner = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(7)
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .margin_top(14)
-        .margin_bottom(10)
-        .margin_start(8)
-        .margin_end(8)
-        .build();
-
-    let img = icon_image(icon_name, 22, Some("hs-tbtn-icon"));
-
-    let lbl = gtk::Label::builder()
-        .label(label_text)
-        .css_classes(["hs-tbtn-label"])
-        .build();
-
-    inner.append(&img);
-    inner.append(&lbl);
-    btn.set_child(Some(&inner));
-    btn
-}
-
 fn load_preview_image(
     path: &Path,
     preview_picture: &gtk::Picture,
@@ -1121,6 +1430,8 @@ fn run_capture_action(
     reveal_button: &gtk::Button,
     gif_button: &gtk::Button,
     target: Target,
+    delay_secs: u64,
+    include_pointer: bool,
     setup_feedback: Option<(&gtk::Button, &gtk::Label)>,
 ) {
     let window = window.clone();
@@ -1198,19 +1509,26 @@ fn run_capture_action(
             let gif_button2 = gif_button.clone();
             let setup_feedback2 = setup_feedback.clone();
 
-            wait_compositor_frame(move || {
+            let proceed = move || wait_compositor_frame(move || {
                 let (cap_tx, cap_rx) =
                     std::sync::mpsc::channel::<anyhow::Result<std::path::PathBuf>>();
                 std::thread::spawn(move || {
                     let result = match target {
-                        Target::Area => {
-                            crate::capture::screenshot::capture_geometry(&selection)
-                        }
+                        Target::Area => crate::capture::screenshot::capture_geometry(
+                            &selection,
+                            include_pointer,
+                        ),
                         Target::Window => {
-                            crate::capture::screenshot::capture_window_geometry(&selection)
+                            crate::capture::screenshot::capture_window_geometry(
+                                &selection,
+                                include_pointer,
+                            )
                         }
                         Target::Monitor => {
-                            crate::capture::screenshot::capture_by_monitor_name(&selection)
+                            crate::capture::screenshot::capture_by_monitor_name(
+                                &selection,
+                                include_pointer,
+                            )
                         }
                     };
                     let _ = cap_tx.send(result);
@@ -1259,6 +1577,12 @@ fn run_capture_action(
                     glib::ControlFlow::Break
                 });
             });
+            // The delay counts against the already-chosen geometry (plan: selection first).
+            if delay_secs > 0 {
+                glib::timeout_add_local_once(Duration::from_secs(delay_secs), proceed);
+            } else {
+                proceed();
+            }
 
             glib::ControlFlow::Break
         });
@@ -1282,6 +1606,7 @@ fn start_recording_action(
     gif_button: &gtk::Button,
     target: Target,
     show_hud: bool,
+    delay_secs: u64,
     setup_feedback: Option<(&gtk::Button, &gtk::Label)>,
 ) {
     let window = window.clone();
@@ -1370,7 +1695,7 @@ fn start_recording_action(
             let gif_button2 = gif_button.clone();
             let setup_feedback2 = setup_feedback.clone();
 
-            wait_compositor_frame(move || {
+            let proceed = move || wait_compositor_frame(move || {
                 match crate::capture::record::launch_recording(selection) {
                     Err(error) => {
                         enable_setup_cta(&setup_cta2);
@@ -1422,6 +1747,12 @@ fn start_recording_action(
                     }
                 }
             });
+            // The delay counts against the already-chosen geometry (plan: selection first).
+            if delay_secs > 0 {
+                glib::timeout_add_local_once(Duration::from_secs(delay_secs), proceed);
+            } else {
+                proceed();
+            }
 
             glib::ControlFlow::Break
         });
@@ -1774,6 +2105,7 @@ fn open_preview_file(
 
 fn set_status(label: &gtk::Label, message: &str, kind: StatusKind) {
     label.set_label(message);
+    label.set_visible(!message.is_empty());
     for cls in ["err", "ok", "live"] {
         label.remove_css_class(cls);
     }
@@ -1844,6 +2176,7 @@ fn set_status_stop_hint(label: &gtk::Label) {
         label.remove_css_class(cls);
     }
     label.set_markup("run \"<b>hyprscreen stop</b>\" to end recording");
+    label.set_visible(true);
 }
 
 fn set_preview_meta(label: &gtk::Label, message: &str) {
@@ -1879,9 +2212,11 @@ fn set_primary_button_content(button: &gtk::Button, mode: Mode) {
         .valign(gtk::Align::Center)
         .build();
     let icon: gtk::Widget = match mode {
-        Mode::Screenshot => icon_image_colored("shutter", 16, None, "#06231F").upcast(),
+        Mode::Screenshot => icon_image_colored("shutter", 18, None, "#06231F").upcast(),
         Mode::Record => gtk::Box::builder()
-            .css_classes(["hs-primary-pulse"])
+            .width_request(13)
+            .height_request(13)
+            .css_classes(["hs-rec-ring"])
             .valign(gtk::Align::Center)
             .build()
             .upcast(),
@@ -1889,12 +2224,20 @@ fn set_primary_button_content(button: &gtk::Button, mode: Mode) {
     let label = gtk::Label::builder()
         .label(match mode {
             Mode::Screenshot => "Capture",
-            Mode::Record => "Start recording",
+            Mode::Record => "Record",
         })
         .css_classes(["hs-primary-label"])
         .build();
+    let kbd = gtk::Label::builder()
+        .label(match mode {
+            Mode::Screenshot => "\u{23ce}",
+            Mode::Record => "\u{23f5}",
+        })
+        .css_classes(["hs-fire-kbd"])
+        .build();
     content.append(&icon);
     content.append(&label);
+    content.append(&kbd);
     button.set_child(Some(&content));
 }
 
@@ -1910,6 +2253,15 @@ fn icon_image_colored(
     css_class: Option<&str>,
     color: &str,
 ) -> gtk::Image {
+    let image = gtk::Image::from_paintable(Some(&icon_texture(icon_key, size, color)));
+    image.set_pixel_size(size);
+    if let Some(css_class) = css_class {
+        image.add_css_class(css_class);
+    }
+    image
+}
+
+fn icon_texture(icon_key: &str, size: i32, color: &str) -> gtk::gdk::Texture {
     let svg = String::from_utf8_lossy(icon_bytes(icon_key)).replace("currentColor", color);
     let bytes = glib::Bytes::from_owned(svg.into_bytes());
     let stream = gio::MemoryInputStream::from_bytes(&bytes);
@@ -1922,13 +2274,7 @@ fn icon_image_colored(
         gio::Cancellable::NONE,
     )
     .expect("failed to rasterize embedded SVG");
-    let texture = gtk::gdk::Texture::for_pixbuf(&pixbuf);
-    let image = gtk::Image::from_paintable(Some(&texture));
-    image.set_pixel_size(size);
-    if let Some(css_class) = css_class {
-        image.add_css_class(css_class);
-    }
-    image
+    gtk::gdk::Texture::for_pixbuf(&pixbuf)
 }
 
 fn icon_bytes(icon_key: &str) -> &'static [u8] {
@@ -1944,6 +2290,33 @@ fn icon_bytes(icon_key: &str) -> &'static [u8] {
         "open" => include_bytes!("../../assets/icons/open.svg"),
         "gif" => include_bytes!("../../assets/icons/gif.svg"),
         "shutter" => include_bytes!("../../assets/icons/shutter.svg"),
+        "shot" => include_bytes!("../../assets/icons/shot.svg"),
+        "rec" => include_bytes!("../../assets/icons/rec.svg"),
+        "timer" => include_bytes!("../../assets/icons/timer.svg"),
+        "pointer" => include_bytes!("../../assets/icons/pointer.svg"),
+        "chevron" => include_bytes!("../../assets/icons/chevron.svg"),
+        "close" => include_bytes!("../../assets/icons/close.svg"),
+        "pen" => include_bytes!("../../assets/icons/pen.svg"),
+        "share" => include_bytes!("../../assets/icons/share.svg"),
+        "trash" => include_bytes!("../../assets/icons/trash.svg"),
+        "play" => include_bytes!("../../assets/icons/play.svg"),
+        "arrow" => include_bytes!("../../assets/icons/arrow.svg"),
+        "box" => include_bytes!("../../assets/icons/box.svg"),
+        "text" => include_bytes!("../../assets/icons/text.svg"),
+        "blur" => include_bytes!("../../assets/icons/blur.svg"),
+        "highlight" => include_bytes!("../../assets/icons/highlight.svg"),
+        "step" => include_bytes!("../../assets/icons/step.svg"),
+        "undo" => include_bytes!("../../assets/icons/undo.svg"),
+        "pause" => include_bytes!("../../assets/icons/pause.svg"),
+        "restart" => include_bytes!("../../assets/icons/restart.svg"),
+        "mic" => include_bytes!("../../assets/icons/mic.svg"),
+        "mic-off" => include_bytes!("../../assets/icons/mic-off.svg"),
+        "cam" => include_bytes!("../../assets/icons/cam.svg"),
+        "cam-off" => include_bytes!("../../assets/icons/cam-off.svg"),
+        "draw" => include_bytes!("../../assets/icons/draw.svg"),
+        "keyboard" => include_bytes!("../../assets/icons/keyboard.svg"),
+        "alert" => include_bytes!("../../assets/icons/alert.svg"),
+        "check" => include_bytes!("../../assets/icons/check.svg"),
         _ => include_bytes!("../../assets/icons/area.svg"),
     }
 }

@@ -2,18 +2,22 @@
 
 ## Responsibilities
 
-- Main window shell
-- Setup page
-- Preview page
+- Main window shell — the Capture Dock (ADR-0012)
+- Quick-settings popover (delay, pointer, recording HUD)
+- Preview page (transitional; replaced by the corner thumbnail per plan)
 - Recording HUD
 - Monitor identifier overlays during `Monitor` selection
 
 ## Invariants
 
-- Main flow uses one window.
+- Main flow uses one window: the horizontal Capture Dock, floating
+  bottom-center on the focused monitor (34px above the edge), sized to content.
 - Extra windows are limited to the recording HUD and transient identification overlays during selection.
 - `Preview` is an internal state.
 - Use GTK4 widgets directly and keep the UI compact and custom.
+- Dock keyboard shortcuts: Enter fires, 1/2/3 pick targets, S/R switch mode,
+  D cycles delay, P toggles pointer, Esc quits.
+- The pointer toggle is disabled in record mode (wf-recorder always records the cursor).
 - `Preview` uses `Back`, `New`, `Save`, one contextual action (`Copy` or `Open`), and `Reveal`.
 - `Back` must clear temporary preview data before returning to `Setup`.
 - The setup page should avoid persistent explanatory copy in normal states; use the status line only for validation, feedback, and errors.

@@ -73,13 +73,6 @@ fn is_hyprland_session() -> bool {
     std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
 }
 
-fn dispatch(command: &str) {
-    let _ = Command::new("hyprctl")
-        .arg("dispatch")
-        .args(command.split_whitespace())
-        .output();
-}
-
 fn dispatch_setprop(selector: &str, property: &str, value: &str) {
     let _ = Command::new("hyprctl")
         .arg("dispatch")
@@ -104,42 +97,6 @@ fn dispatch_setfloating(selector: &str) {
         .arg("setfloating")
         .arg(selector)
         .output();
-}
-
-pub fn float_window_once() {
-    if !is_hyprland_session() {
-        return;
-    }
-
-    // Mapping is asynchronous, so apply the floating/centering hint shortly
-    // after the main window is presented and once more as a lightweight retry.
-    // Target hyprscreen by title — using `active` floats whatever happens to be
-    // focused, which in CLI subcommand flow can be the user's terminal.
-    let title = "Hyprscreen".to_string();
-    for delay in [120_u64, 320_u64] {
-        let title = title.clone();
-        glib::timeout_add_local_once(Duration::from_millis(delay), move || {
-            if let Some(selector) = selector_for_title(&title) {
-                dispatch_setfloating(&selector);
-                if is_active_window(&title) {
-                    dispatch("centerwindow");
-                }
-            }
-        });
-    }
-}
-
-fn is_active_window(title: &str) -> bool {
-    let Ok(output) = Command::new("hyprctl").args(["activewindow", "-j"]).output() else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let Ok(value): Result<serde_json::Value, _> = serde_json::from_slice(&output.stdout) else {
-        return false;
-    };
-    value.get("title").and_then(|t| t.as_str()) == Some(title)
 }
 
 pub fn place_window_exact(window_match: &str, x: i32, y: i32) {

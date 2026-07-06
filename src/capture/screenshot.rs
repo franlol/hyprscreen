@@ -104,25 +104,29 @@ pub fn select_monitor() -> Result<String> {
         .ok_or_else(|| anyhow!("selected monitor could not be resolved"))
 }
 
-pub fn capture_geometry(geometry: &str) -> Result<PathBuf> {
+pub fn capture_geometry(geometry: &str, include_pointer: bool) -> Result<PathBuf> {
     // slurp's 3px border is centered on the selection boundary, so ~1.5 logical
     // pixels of it fall inside the reported geometry. Insetting by 2px removes
     // the two artifact rows/columns that would otherwise appear in the capture.
-    capture_geometry_inset(geometry, 2)
+    capture_geometry_inset(geometry, 2, include_pointer)
 }
 
-pub fn capture_window_geometry(geometry: &str) -> Result<PathBuf> {
+pub fn capture_window_geometry(geometry: &str, include_pointer: bool) -> Result<PathBuf> {
     // Window captures need a larger inset: Hyprland draws its border + rounded
     // corners over the region reported by `hyprctl clients`. The inset must cover
     // border_size + rounding so that neither the straight-edge border nor the
     // corner arc bleeds into the captured image.
-    capture_geometry_inset(geometry, super::hyprland_window_inset())
+    capture_geometry_inset(geometry, super::hyprland_window_inset(), include_pointer)
 }
 
-fn capture_geometry_inset(geometry: &str, inset: i32) -> Result<PathBuf> {
+fn capture_geometry_inset(geometry: &str, inset: i32, include_pointer: bool) -> Result<PathBuf> {
     let path = temp_file_path()?;
     let inset_geom = super::inset_geometry(geometry, inset).unwrap_or_else(|| geometry.to_owned());
-    let status = Command::new("grim")
+    let mut command = Command::new("grim");
+    if include_pointer {
+        command.arg("-c");
+    }
+    let status = command
         .arg("-g")
         .arg(&inset_geom)
         .arg(&path)
@@ -136,9 +140,13 @@ fn capture_geometry_inset(geometry: &str, inset: i32) -> Result<PathBuf> {
     Ok(path)
 }
 
-pub fn capture_by_monitor_name(name: &str) -> Result<PathBuf> {
+pub fn capture_by_monitor_name(name: &str, include_pointer: bool) -> Result<PathBuf> {
     let path = temp_file_path()?;
-    let status = Command::new("grim")
+    let mut command = Command::new("grim");
+    if include_pointer {
+        command.arg("-c");
+    }
+    let status = command
         .arg("-o")
         .arg(name)
         .arg(&path)
