@@ -17,6 +17,7 @@
 - temporary video file before `Save` or `Back`
 - preview actions: `Open` and `Reveal` only after `Save`
 - `Open` follows `open_video_command`, then common video players
+- `GIF` preview action (recordings only) converts the recording to a GIF and makes that GIF the active preview, so `Save` / `Open` / `Reveal` then apply to it like any recording — see ADR-0010; tuned by `gif_fps` / `gif_max_width`; runs off the GTK main loop with a "Converting…" status
 - Recording preview generates a thumbnail and metadata such as duration, resolution, and file size before save
 - When `show_recording_hud=false`, a small red recording indicator flashes for 300ms every 5s on the recording monitor
 

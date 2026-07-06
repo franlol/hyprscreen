@@ -514,6 +514,38 @@ fn probe_video_metadata(path: &Path) -> Result<(Option<f64>, Option<u32>, Option
     Ok((duration, width, height))
 }
 
+/// Converts a recorded video into a GIF using ffmpeg's palettegen/paletteuse filter.
+///
+/// Frame rate and maximum width come from config (`gif_fps`, `gif_max_width`). The
+/// `scale='min(<max_w>,iw)':-2` term never upscales and keeps even dimensions, so the
+/// aspect ratio is preserved. Returns the path to the generated GIF in the temp dir.
+pub fn convert_recording_to_gif(source: &Path) -> Result<PathBuf> {
+    let config = crate::config::get();
+    let gif_path = super::hyprscreen_temp_dir()?.join(crate::capture::generated_filename("gif"));
+
+    let filter = format!(
+        "fps={},scale='min({},iw)':-2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+        config.gif_fps, config.gif_max_width
+    );
+
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(source)
+        .args(["-vf", &filter])
+        .arg(&gif_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("failed to launch ffmpeg for GIF conversion")?;
+
+    if !status.success() {
+        bail!("ffmpeg failed to convert the recording to GIF")
+    }
+
+    Ok(gif_path)
+}
+
 fn generate_video_thumbnail(path: &Path) -> Result<PathBuf> {
     let thumbnail_path = super::hyprscreen_temp_dir()?.join(format!(
         "{}-thumb.png",

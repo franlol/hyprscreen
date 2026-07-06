@@ -30,6 +30,8 @@ pub struct AppConfig {
     pub reveal_folder_command: Option<String>,
     pub filename_prefix: String,
     pub timestamp_format: String,
+    pub gif_fps: u64,
+    pub gif_max_width: u64,
 }
 
 impl Default for AppConfig {
@@ -47,6 +49,8 @@ impl Default for AppConfig {
             reveal_folder_command: None,
             filename_prefix: "hyprscreen".to_string(),
             timestamp_format: "%H%M%S%d%m%Y".to_string(),
+            gif_fps: 15,
+            gif_max_width: 800,
         }
     }
 }
@@ -117,6 +121,9 @@ fn load() -> AppConfig {
             .filter(|value| !value.is_empty())
             .cloned()
             .unwrap_or(defaults.timestamp_format),
+        gif_fps: parse_positive_u64(pairs.get("gif_fps")).unwrap_or(defaults.gif_fps),
+        gif_max_width: parse_positive_u64(pairs.get("gif_max_width"))
+            .unwrap_or(defaults.gif_max_width),
     }
 }
 

@@ -18,6 +18,7 @@ Fast. Native. One window. No compromises.
 
 - Screenshots and recordings — area, window, or full monitor
 - One-window flow with built-in preview: save, copy, open, reveal, repeat
+- Export a recording to GIF straight from the preview
 - Live dimensions while selecting an area
 - Monitor identifier overlays — pick the right screen, every time
 - Optional recording HUD with a global `hyprscreen stop` CLI
@@ -72,6 +73,8 @@ show_recording_hud=true
 recording_indicator_enabled=true
 recording_indicator_interval_seconds=5
 recording_indicator_duration_ms=300
+gif_fps=15                      # frame rate of GIFs exported from a recording
+gif_max_width=800               # max GIF width in px (never upscales)
 
 # Storage
 save_dir_screenshots=~/Pictures/Screenshots
@@ -94,6 +97,8 @@ timestamp_format=%H%M%S%d%m%Y
 | `recording_indicator_enabled` | When the HUD is hidden, flash a small red indicator on the target screen. |
 | `recording_indicator_interval_seconds` | Seconds between indicator flashes. |
 | `recording_indicator_duration_ms` | Length of each indicator flash in milliseconds. |
+| `gif_fps` | Frame rate of GIFs exported from a recording (default `15`). |
+| `gif_max_width` | Maximum width in px for exported GIFs; never upscales (default `800`). |
 | `save_dir_screenshots` | Where `Save` writes screenshots. |
 | `save_dir_recordings` | Where `Save` writes recordings. |
 | `open_video_command` | Player invoked by `Open` for recordings. Falls back to common players if unset. |

@@ -143,6 +143,13 @@ pub fn build(
     reveal_button.set_sensitive(false);
     set_action_button_content(&reveal_button, "reveal", "Reveal");
 
+    // Recording-only: converts the previewed recording to a GIF. Hidden for screenshots.
+    let gif_button = gtk::Button::new();
+    gif_button.add_css_class("hs-abtn");
+    gif_button.set_sensitive(false);
+    gif_button.set_visible(false);
+    set_action_button_content(&gif_button, "gif", "GIF");
+
     let setup_page = build_setup_page(
         &window,
         &stack,
@@ -158,6 +165,7 @@ pub fn build(
         &save_button,
         &copy_button,
         &reveal_button,
+        &gif_button,
         startup,
     );
     stack.add_named(&setup_page, Some("setup"));
@@ -176,6 +184,7 @@ pub fn build(
         &save_button,
         &copy_button,
         &reveal_button,
+        &gif_button,
     );
     stack.add_named(&preview_page, Some("preview"));
     stack.set_visible_child_name("setup");
@@ -201,6 +210,7 @@ fn build_setup_page(
     save_button: &gtk::Button,
     copy_button: &gtk::Button,
     reveal_button: &gtk::Button,
+    gif_button: &gtk::Button,
     startup: Option<crate::cli::StartupAction>,
 ) -> gtk::Widget {
     let config = crate::config::get();
@@ -485,6 +495,8 @@ fn build_setup_page(
         copy_button,
         #[weak]
         reveal_button,
+        #[weak]
+        gif_button,
         #[strong]
         preview_state,
         #[strong]
@@ -515,6 +527,7 @@ fn build_setup_page(
                     &save_button,
                     &copy_button,
                     &reveal_button,
+                    &gif_button,
                     target,
                     Some((&cta_button, &status_label)),
                 );
@@ -546,6 +559,7 @@ fn build_setup_page(
                 &save_button,
                 &copy_button,
                 &reveal_button,
+                &gif_button,
                 target,
                 show_hud,
                 Some((&cta_button, &status_label)),
@@ -621,6 +635,7 @@ fn build_preview_page(
     save_button: &gtk::Button,
     copy_button: &gtk::Button,
     reveal_button: &gtk::Button,
+    gif_button: &gtk::Button,
 ) -> gtk::Widget {
     let body = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -663,6 +678,7 @@ fn build_preview_page(
     actions.append(&back_button);
     actions.append(&new_button);
     actions.append(save_button);
+    actions.append(gif_button);
     actions.append(copy_button);
     actions.append(reveal_button);
 
@@ -686,6 +702,8 @@ fn build_preview_page(
         copy_button,
         #[weak]
         reveal_button,
+        #[weak]
+        gif_button,
         #[strong]
         preview_state,
         #[strong]
@@ -699,6 +717,7 @@ fn build_preview_page(
                 &save_button,
                 &copy_button,
                 &reveal_button,
+                &gif_button,
             );
             enable_setup_cta(&setup_cta);
             set_status_neutral(&setup_status_label, "");
@@ -727,6 +746,8 @@ fn build_preview_page(
         copy_button,
         #[weak]
         reveal_button,
+        #[weak]
+        gif_button,
         #[strong]
         preview_state,
         #[strong]
@@ -752,6 +773,7 @@ fn build_preview_page(
                     &save_button,
                     &copy_button,
                     &reveal_button,
+                    &gif_button,
                     action.target,
                     None,
                 ),
@@ -768,6 +790,7 @@ fn build_preview_page(
                     &save_button,
                     &copy_button,
                     &reveal_button,
+                    &gif_button,
                     action.target,
                     action.show_recording_hud,
                     None,
@@ -811,6 +834,98 @@ fn build_preview_page(
         move |_| match reveal_preview_file(&preview_state.borrow()) {
             Ok(method) => set_status_ok(&preview_status_label, &method.feedback_message()),
             Err(error) => set_status_err(&preview_status_label, &format!("Reveal failed: {error}")),
+        }
+    ));
+
+    // ── GIF (recordings only) ──────────────────────────────────
+    // Convert the recording to a GIF and make the GIF the active preview, so the standard
+    // Save / Open / Reveal lifecycle then applies to it exactly like a recording.
+    gif_button.connect_clicked(glib::clone!(
+        #[weak]
+        preview_picture,
+        #[weak]
+        preview_meta_label,
+        #[weak]
+        preview_status_label,
+        #[weak]
+        save_button,
+        #[weak]
+        copy_button,
+        #[weak]
+        reveal_button,
+        #[weak]
+        gif_button,
+        #[strong]
+        preview_state,
+        move |_| {
+            let source = {
+                let preview = preview_state.borrow();
+                if preview.kind != PreviewKind::Recording {
+                    return;
+                }
+                preview.current_path.clone()
+            };
+            let Some(source) = source else {
+                set_status_err(
+                    &preview_status_label,
+                    "GIF failed: there is no recording to convert",
+                );
+                return;
+            };
+
+            set_status_live(&preview_status_label, "Converting to GIF…");
+            gif_button.set_sensitive(false);
+
+            // Conversion is CPU-bound; run it off the GTK main loop and poll for the result.
+            let (tx, rx) = std::sync::mpsc::channel::<anyhow::Result<PathBuf>>();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::capture::record::convert_recording_to_gif(&source));
+            });
+
+            let preview_state = preview_state.clone();
+            let preview_picture = preview_picture.clone();
+            let preview_meta_label = preview_meta_label.clone();
+            let preview_status_label = preview_status_label.clone();
+            let save_button = save_button.clone();
+            let copy_button = copy_button.clone();
+            let reveal_button = reveal_button.clone();
+            let gif_button = gif_button.clone();
+            glib::timeout_add_local(
+                Duration::from_millis(SELECTION_POLL_INTERVAL_MS),
+                move || {
+                    let result = match rx.try_recv() {
+                        Ok(r) => r,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            return glib::ControlFlow::Continue
+                        }
+                        Err(_) => return glib::ControlFlow::Break,
+                    };
+                    match result {
+                        Ok(gif_path) => {
+                            load_preview_gif(
+                                &gif_path,
+                                &preview_state,
+                                &preview_picture,
+                                &preview_meta_label,
+                                &copy_button,
+                                &reveal_button,
+                            );
+                            save_button.set_sensitive(true);
+                            // The artifact is already a GIF; nothing left to convert.
+                            gif_button.set_sensitive(false);
+                            set_status_ok(&preview_status_label, "GIF ready — Save to keep it");
+                        }
+                        Err(error) => {
+                            gif_button.set_sensitive(true);
+                            set_status_err(
+                                &preview_status_label,
+                                &format!("GIF failed: {error}"),
+                            );
+                        }
+                    }
+                    glib::ControlFlow::Break
+                },
+            );
         }
     ));
 
@@ -947,6 +1062,43 @@ fn load_preview_recording(
     }
 }
 
+/// Makes a freshly converted GIF the active preview artifact, replacing the recording.
+/// Leaves the Save / Open / Reveal buttons in the same "produced, not yet saved" state a
+/// recording lands in, so the rest of the flow is identical.
+fn load_preview_gif(
+    path: &Path,
+    preview_state: &Rc<RefCell<PreviewState>>,
+    preview_picture: &gtk::Picture,
+    preview_meta_label: &gtk::Label,
+    copy_button: &gtk::Button,
+    reveal_button: &gtk::Button,
+) {
+    {
+        let mut preview = preview_state.borrow_mut();
+        // The recording temp and its thumbnail are superseded by the GIF.
+        if let Some(old) = preview.temp_path.take() {
+            let _ = std::fs::remove_file(old);
+        }
+        if let Some(old) = preview.thumbnail_path.take() {
+            let _ = std::fs::remove_file(old);
+        }
+        preview.temp_path = Some(path.to_path_buf());
+        preview.current_path = Some(path.to_path_buf());
+        preview.thumbnail_path = None;
+        preview.kind = PreviewKind::Recording;
+    }
+
+    let file = gio::File::for_path(path);
+    preview_picture.set_file(Some(&file));
+    set_preview_meta(
+        preview_meta_label,
+        &format!("{}", path.file_name().unwrap_or_default().to_string_lossy()),
+    );
+    set_action_button_content(copy_button, "open", "Open");
+    copy_button.set_sensitive(false);
+    reveal_button.set_sensitive(false);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_capture_action(
     window: &gtk::ApplicationWindow,
@@ -958,6 +1110,7 @@ fn run_capture_action(
     save_button: &gtk::Button,
     copy_button: &gtk::Button,
     reveal_button: &gtk::Button,
+    gif_button: &gtk::Button,
     target: Target,
     setup_feedback: Option<(&gtk::Button, &gtk::Label)>,
 ) {
@@ -970,6 +1123,7 @@ fn run_capture_action(
     let save_button = save_button.clone();
     let copy_button = copy_button.clone();
     let reveal_button = reveal_button.clone();
+    let gif_button = gif_button.clone();
     let setup_feedback = setup_feedback.map(|(b, l)| (b.clone(), l.clone()));
 
     window.hide();
@@ -1032,6 +1186,7 @@ fn run_capture_action(
             let save_button2 = save_button.clone();
             let copy_button2 = copy_button.clone();
             let reveal_button2 = reveal_button.clone();
+            let gif_button2 = gif_button.clone();
             let setup_feedback2 = setup_feedback.clone();
 
             wait_compositor_frame(move || {
@@ -1082,6 +1237,7 @@ fn run_capture_action(
                             set_action_button_content(&copy_button2, "copy", "Copy");
                             copy_button2.set_sensitive(true);
                             reveal_button2.set_sensitive(false);
+                            gif_button2.set_visible(false);
                             stack2.set_visible_child_name("preview");
                         }
                         Err(error) => {
@@ -1114,6 +1270,7 @@ fn start_recording_action(
     save_button: &gtk::Button,
     copy_button: &gtk::Button,
     reveal_button: &gtk::Button,
+    gif_button: &gtk::Button,
     target: Target,
     show_hud: bool,
     setup_feedback: Option<(&gtk::Button, &gtk::Label)>,
@@ -1130,6 +1287,7 @@ fn start_recording_action(
     let save_button = save_button.clone();
     let copy_button = copy_button.clone();
     let reveal_button = reveal_button.clone();
+    let gif_button = gif_button.clone();
     let setup_feedback = setup_feedback.map(|(b, l)| (b.clone(), l.clone()));
 
     if let Some((cta_button, status_label)) = &setup_feedback {
@@ -1200,6 +1358,7 @@ fn start_recording_action(
             let save_button2 = save_button.clone();
             let copy_button2 = copy_button.clone();
             let reveal_button2 = reveal_button.clone();
+            let gif_button2 = gif_button.clone();
             let setup_feedback2 = setup_feedback.clone();
 
             wait_compositor_frame(move || {
@@ -1249,6 +1408,7 @@ fn start_recording_action(
                             &save_button2,
                             &copy_button2,
                             &reveal_button2,
+                            &gif_button2,
                         );
                     }
                 }
@@ -1273,6 +1433,7 @@ fn start_recording_poll(
     save_button: &gtk::Button,
     copy_button: &gtk::Button,
     reveal_button: &gtk::Button,
+    gif_button: &gtk::Button,
 ) {
     let window = window.clone();
     let stack = stack.clone();
@@ -1286,6 +1447,7 @@ fn start_recording_poll(
     let save_button = save_button.clone();
     let copy_button = copy_button.clone();
     let reveal_button = reveal_button.clone();
+    let gif_button = gif_button.clone();
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
         let mut borrowed = recording_state.borrow_mut();
@@ -1331,6 +1493,8 @@ fn start_recording_poll(
                 set_status_neutral(&preview_status_label, "");
                 save_button.set_sensitive(true);
                 copy_button.set_sensitive(false);
+                gif_button.set_visible(true);
+                gif_button.set_sensitive(true);
                 stack.set_visible_child_name("preview");
                 glib::ControlFlow::Break
             }
@@ -1551,6 +1715,7 @@ fn active_target(area_button: &gtk::ToggleButton, window_button: &gtk::ToggleBut
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn clear_preview(
     preview_state: &Rc<RefCell<PreviewState>>,
     preview_picture: &gtk::Picture,
@@ -1559,6 +1724,7 @@ fn clear_preview(
     save_button: &gtk::Button,
     copy_button: &gtk::Button,
     reveal_button: &gtk::Button,
+    gif_button: &gtk::Button,
 ) {
     let mut preview = preview_state.borrow_mut();
     if let Some(path) = preview.temp_path.take() {
@@ -1578,6 +1744,8 @@ fn clear_preview(
     set_action_button_content(copy_button, "copy", "Copy");
     copy_button.set_sensitive(false);
     reveal_button.set_sensitive(false);
+    gif_button.set_sensitive(false);
+    gif_button.set_visible(false);
 }
 
 fn open_preview_file(
@@ -1753,6 +1921,7 @@ fn icon_bytes(icon_key: &str) -> &'static [u8] {
         "copy" => include_bytes!("../../assets/icons/copy.svg"),
         "reveal" => include_bytes!("../../assets/icons/reveal.svg"),
         "open" => include_bytes!("../../assets/icons/open.svg"),
+        "gif" => include_bytes!("../../assets/icons/gif.svg"),
         "shutter" => include_bytes!("../../assets/icons/shutter.svg"),
         _ => include_bytes!("../../assets/icons/area.svg"),
     }
