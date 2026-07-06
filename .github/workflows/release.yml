@@ -1,0 +1,81 @@
+name: Release
+
+# Deploy on every version tag (vX.Y.Z):
+#   1. Build the release binary on a clean machine (build gate).
+#   2. Create the GitHub Release with the prebuilt x86_64 binary attached.
+#   3. Compute the sha256 of the tag's source tarball.
+#   4. Bump pkg/PKGBUILD (pkgver + sha256) and push it + .SRCINFO to the AUR.
+#
+# The AUR push requires the AUR_SSH_PRIVATE_KEY repository secret.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # required to create the GitHub Release
+
+jobs:
+  build-and-release:
+    name: Build & publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev build-essential pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Stage binary artifact
+        run: |
+          install -Dm755 target/release/hyprscreen \
+            "dist/hyprscreen-${GITHUB_REF_NAME}-x86_64"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/hyprscreen-*-x86_64
+          generate_release_notes: true
+
+  publish-aur:
+    name: Publish to AUR
+    needs: build-and-release   # only sync AUR if the build passed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bump PKGBUILD version + sha256
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARBALL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          HASH="$(curl -fsSL "$TARBALL" | sha256sum | cut -d' ' -f1)"
+          echo "Version: $VERSION  sha256: $HASH"
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/"                pkg/PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/"                         pkg/PKGBUILD
+          sed -i "s/^sha256sums=.*/sha256sums=('${HASH}')/"       pkg/PKGBUILD
+
+      - name: Publish to the AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v2.7.2
+        with:
+          pkgname: hyprscreen
+          pkgbuild: ./pkg/PKGBUILD
+          commit_username: franlol
+          commit_email: fraaaaan@gmail.com
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "chore: update to ${{ github.ref_name }}"
+          # The action runs makepkg in an Arch container, so .SRCINFO is
+          # regenerated and pushed automatically alongside the PKGBUILD.

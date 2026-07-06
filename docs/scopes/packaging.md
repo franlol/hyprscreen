@@ -10,9 +10,42 @@
 - `pkg/PKGBUILD` lives in the main repo (reference copy).
 - The actual AUR submission is a separate git clone at `~/git/aur-hyprscreen` pushed to `ssh://aur@aur.archlinux.org/hyprscreen.git`.
 
-## Release Runbook
+## Release (automated)
 
-Release `vX.Y.Z` in this exact order.
+Releases are automated by `.github/workflows/release.yml`, triggered on any
+`vX.Y.Z` tag push. To cut a release:
+
+```bash
+# 1. Bump the version in the code, commit, and push main
+sed -i 's/^version = ".*"/version = "X.Y.Z"/' Cargo.toml
+cargo build --release            # refreshes Cargo.lock
+git commit -am "chore: vX.Y.Z"
+git push origin main
+
+# 2. Tag and push — this fires the workflow
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+The workflow then:
+
+1. Builds the release binary on a clean runner (build gate).
+2. Creates the GitHub Release with the prebuilt `hyprscreen-vX.Y.Z-x86_64` binary attached.
+3. Computes the sha256 of the tag's source tarball.
+4. Bumps `pkg/PKGBUILD` (pkgver + sha256), regenerates `.SRCINFO`, and pushes to the AUR.
+
+You no longer edit the PKGBUILD hash or touch `~/git/aur-hyprscreen` by hand.
+
+### One-time setup
+
+The AUR push authenticates with an SSH key stored as the `AUR_SSH_PRIVATE_KEY`
+repository secret (Settings → Secrets and variables → Actions). Use the private
+key whose public half is registered on your AUR account. Without it, the
+`publish-aur` job fails but the GitHub Release still succeeds.
+
+## Release Runbook (manual fallback)
+
+If the workflow is unavailable, release `vX.Y.Z` in this exact order.
 
 ### 1. Bump version locally
 
