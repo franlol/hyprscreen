@@ -31,7 +31,11 @@ pub fn stop() {
 }
 
 /// Toggles the draw overlay on the given monitor region.
-pub fn toggle(monitor: crate::capture::record::MonitorPlacement) {
+///
+/// `on_stop` runs whenever the overlay closes, no matter who closed it
+/// (Esc, the HUD button, or recording teardown), so the caller can keep
+/// its own state in sync.
+pub fn toggle(monitor: crate::capture::record::MonitorPlacement, on_stop: impl Fn() + 'static) {
     if is_active() {
         stop();
         return;
@@ -116,6 +120,14 @@ pub fn toggle(monitor: crate::capture::record::MonitorPlacement) {
         });
     }
     window.add_controller(keys);
+
+    // Covers every close path, including Esc and compositor-initiated
+    // closes that bypass stop().
+    window.connect_close_request(move |_| {
+        CURRENT.take();
+        on_stop();
+        glib::Propagation::Proceed
+    });
 
     window.set_child(Some(&canvas));
     crate::hyprland::preposition_window(TITLE, monitor.x, monitor.y);

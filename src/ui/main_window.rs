@@ -1551,7 +1551,12 @@ fn create_recording_hud(
         }
         let draw_button = hud_button("draw", "Draw on screen · Esc exits");
         draw_button.connect_clicked(move |button| {
-            super::draw_overlay::toggle(monitor);
+            let weak = button.downgrade();
+            super::draw_overlay::toggle(monitor, move || {
+                if let Some(button) = weak.upgrade() {
+                    button.remove_css_class("on");
+                }
+            });
             if super::draw_overlay::is_active() {
                 button.add_css_class("on");
             } else {
