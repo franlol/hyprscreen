@@ -1587,6 +1587,12 @@ fn create_recording_hud(
         glib::ControlFlow::Continue
     });
 
+    // Pre-position from the measured size so the HUD maps at the top of the
+    // recorded monitor instead of flashing at screen center; position_hud
+    // then corrects with the realized size.
+    let (_, nat_w, _, _) = content.measure(gtk::Orientation::Horizontal, -1);
+    let (x, y) = hud_position(&monitor, nat_w);
+    crate::hyprland::preposition_window("Hyprscreen HUD", x, y);
     hud.present();
     crate::hyprland::make_window_plain("Hyprscreen HUD");
     position_hud(&hud, monitor);
@@ -1624,10 +1630,15 @@ fn position_hud(window: &gtk::Window, monitor: crate::capture::record::MonitorPl
         if w <= 1 {
             return;
         }
-        let x = monitor.x + ((monitor.width - w) / 2).max(0);
-        let y = monitor.y + 18;
+        let (x, y) = hud_position(&monitor, w);
         crate::hyprland::place_window_exact("Hyprscreen HUD", x, y);
     });
+}
+
+fn hud_position(monitor: &crate::capture::record::MonitorPlacement, w: i32) -> (i32, i32) {
+    let x = monitor.x + ((monitor.width - w) / 2).max(0);
+    let y = monitor.y + 18;
+    (x, y)
 }
 
 fn show_monitor_identifiers(monitors: &[crate::hyprland::Monitor]) -> Vec<gtk::Window> {
@@ -1649,10 +1660,11 @@ fn show_monitor_identifiers(monitors: &[crate::hyprland::Monitor]) -> Vec<gtk::W
                 .css_classes(["hs-mon-id-label"])
                 .build();
             window.set_child(Some(&label));
-            window.present();
 
             let x = monitor.x + (monitor.width - 180) / 2;
             let y = monitor.y + (monitor.height - 96) / 2;
+            crate::hyprland::preposition_window(&title, x, y);
+            window.present();
             crate::hyprland::make_window_plain(&title);
             crate::hyprland::place_window_exact(&title, x, y);
 
@@ -1692,10 +1704,11 @@ fn create_recording_indicator(
         .margin_end(2)
         .build();
     indicator.set_child(Some(&dot));
-    indicator.present();
 
     let x = monitor.x + ((monitor.width - 16) / 2).max(0);
     let y = monitor.y + monitor.height - 16 - 20;
+    crate::hyprland::preposition_window("Hyprscreen Recording Indicator", x, y);
+    indicator.present();
     crate::hyprland::make_window_plain("Hyprscreen Recording Indicator");
     crate::hyprland::place_window_exact("Hyprscreen Recording Indicator", x, y);
     dot.set_visible(false);

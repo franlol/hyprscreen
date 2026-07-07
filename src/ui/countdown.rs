@@ -74,6 +74,14 @@ pub fn run(
     root.append(&circle);
     root.append(&cancel);
     window.set_child(Some(&root));
+    // Pre-position from the measured size so the overlay maps centered in
+    // the region instead of flashing at screen center; position() then
+    // corrects with the realized size.
+    let (_, nat_w, _, _) = root.measure(gtk::Orientation::Horizontal, -1);
+    let (_, nat_h, _, _) = root.measure(gtk::Orientation::Vertical, nat_w);
+    if let Some((x, y)) = centered_in(region, nat_w, nat_h) {
+        crate::hyprland::preposition_window(TITLE, x, y);
+    }
     window.present();
     crate::hyprland::make_window_plain(TITLE);
     position(&window, region);
@@ -148,13 +156,15 @@ fn position(window: &gtk::Window, region: Option<(i32, i32, i32, i32)>) {
         if w <= 1 {
             return;
         }
-        let Some((rx, ry, rw, rh)) = region.or_else(|| {
-            crate::hyprland::focused_monitor().map(|m| (m.x, m.y, m.width, m.height))
-        }) else {
-            return;
-        };
-        let x = rx + ((rw - w) / 2).max(0);
-        let y = ry + ((rh - h) / 2).max(0);
-        crate::hyprland::place_window_exact(TITLE, x, y);
+        if let Some((x, y)) = centered_in(region, w, h) {
+            crate::hyprland::place_window_exact(TITLE, x, y);
+        }
     });
+}
+
+fn centered_in(region: Option<(i32, i32, i32, i32)>, w: i32, h: i32) -> Option<(i32, i32)> {
+    let (rx, ry, rw, rh) = region.or_else(|| {
+        crate::hyprland::focused_monitor().map(|m| (m.x, m.y, m.width, m.height))
+    })?;
+    Some((rx + ((rw - w) / 2).max(0), ry + ((rh - h) / 2).max(0)))
 }

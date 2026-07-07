@@ -118,6 +118,7 @@ pub fn toggle(monitor: crate::capture::record::MonitorPlacement) {
     window.add_controller(keys);
 
     window.set_child(Some(&canvas));
+    crate::hyprland::preposition_window(TITLE, monitor.x, monitor.y);
     window.present();
     crate::hyprland::make_window_plain(TITLE);
     crate::hyprland::place_window_exact(TITLE, monitor.x, monitor.y);

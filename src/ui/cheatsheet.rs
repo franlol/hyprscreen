@@ -114,6 +114,16 @@ pub fn toggle() {
     window.add_controller(keys);
 
     window.set_child(Some(&root));
+    // Pre-position from the measured size so the sheet maps centered
+    // instead of flashing at the compositor's default spot; position()
+    // then corrects with the realized size.
+    let (_, nat_w, _, _) = root.measure(gtk::Orientation::Horizontal, -1);
+    let (_, nat_h, _, _) = root.measure(gtk::Orientation::Vertical, nat_w);
+    if let Some(mon) = crate::hyprland::focused_monitor() {
+        let x = mon.x + ((mon.width - nat_w) / 2).max(0);
+        let y = mon.y + ((mon.height - nat_h) / 2).max(0);
+        crate::hyprland::preposition_window(TITLE, x, y);
+    }
     window.present();
     crate::hyprland::make_window_glass(TITLE, 16);
     position(&window);
