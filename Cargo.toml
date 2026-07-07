@@ -7,9 +7,16 @@ license = "MIT"
 repository = "https://github.com/franlol/hyprscreen"
 authors = ["franlol"]
 
+[features]
+default = ["webcam"]
+# Webcam bubble (ADR-0019): GStreamer v4l2 -> gtk4paintablesink pipeline.
+# Strip with --no-default-features if the dependency is unwanted.
+webcam = ["dep:gstreamer"]
+
 [dependencies]
 anyhow = "1.0"
 cairo-rs = { version = "0.20", features = ["png"] }
+gstreamer = { version = "0.23", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 glib = "0.20"
 gtk = { version = "0.9", package = "gtk4", features = ["v4_8"] }

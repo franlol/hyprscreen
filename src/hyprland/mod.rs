@@ -115,6 +115,21 @@ pub fn place_window_exact(window_match: &str, x: i32, y: i32) {
     }
 }
 
+/// Moves a floating window by a relative delta (used for drag-to-move).
+#[cfg_attr(not(feature = "webcam"), allow(dead_code))]
+pub fn move_window_relative(window_match: &str, dx: i32, dy: i32) {
+    if !is_hyprland_session() {
+        return;
+    }
+    if let Some(selector) = selector_for_title(window_match) {
+        let _ = Command::new("hyprctl")
+            .arg("dispatch")
+            .arg("movewindowpixel")
+            .arg(format!("{dx} {dy},{selector}"))
+            .output();
+    }
+}
+
 /// Pins a floating window so it stays above the stack (best effort).
 pub fn pin_window(window_match: &str) {
     if !is_hyprland_session() {

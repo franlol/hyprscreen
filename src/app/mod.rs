@@ -1100,4 +1100,31 @@ window.hs-draw-window > * {
     background: rgba(255, 255, 255, 0.05);
     box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset;
 }
+
+
+/* ═══════════════ Webcam bubble (ADR-0019) ═══════════════ */
+
+window.hs-webcam-window {
+    background: #1C2430;
+}
+
+.hs-webcam-live {
+    background: rgba(0, 0, 0, 0.45);
+    border-radius: 5px;
+    padding: 3px 6px;
+}
+
+.hs-webcam-live-label {
+    color: #FF5D5D;
+    font-family: "JetBrains Mono", "Fira Mono", monospace;
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    line-height: 1;
+}
+
+.hs-webcam-live-dot {
+    background: #FF5D5D;
+    border-radius: 999px;
+}
 "#;

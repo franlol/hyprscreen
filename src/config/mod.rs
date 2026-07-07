@@ -40,6 +40,10 @@ pub struct AppConfig {
     pub audio_device: Option<String>,
     pub hud_style: HudStyle,
     pub annotate_default_color: String,
+    pub webcam_enabled: bool,
+    pub webcam_device: String,
+    pub webcam_size: u64,
+    pub webcam_position: String,
     pub default_mode: DefaultMode,
     pub default_target: DefaultTarget,
     pub show_recording_hud: bool,
@@ -69,6 +73,10 @@ impl Default for AppConfig {
             audio_device: None,
             hud_style: HudStyle::Full,
             annotate_default_color: "#5EE6D0".to_string(),
+            webcam_enabled: false,
+            webcam_device: "/dev/video0".to_string(),
+            webcam_size: 132,
+            webcam_position: "bottom-left".to_string(),
             default_mode: DefaultMode::Screenshot,
             default_target: DefaultTarget::Area,
             show_recording_hud: true,
@@ -129,6 +137,23 @@ fn load() -> AppConfig {
             .filter(|value| value.starts_with('#') && value.len() == 7)
             .cloned()
             .unwrap_or(defaults.annotate_default_color),
+        webcam_enabled: parse_bool(pairs.get("webcam_enabled")).unwrap_or(defaults.webcam_enabled),
+        webcam_device: pairs
+            .get("webcam_device")
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .unwrap_or(defaults.webcam_device),
+        webcam_size: parse_positive_u64(pairs.get("webcam_size")).unwrap_or(defaults.webcam_size),
+        webcam_position: pairs
+            .get("webcam_position")
+            .filter(|value| {
+                matches!(
+                    value.as_str(),
+                    "bottom-left" | "bottom-right" | "top-left" | "top-right"
+                )
+            })
+            .cloned()
+            .unwrap_or(defaults.webcam_position),
         default_mode: parse_default_mode(pairs.get("default_mode"))
             .unwrap_or(defaults.default_mode),
         default_target: parse_default_target(pairs.get("default_target"))

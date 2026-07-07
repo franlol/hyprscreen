@@ -1122,6 +1122,11 @@ fn start_recording_action(
                                 pending: PendingAction::None,
                             });
 
+                            #[cfg(feature = "webcam")]
+                            if crate::config::get().webcam_enabled {
+                                super::webcam::toggle(monitor);
+                            }
+
                             start_recording_poll(&window2, &recording_state2, &setup_cta2);
                         }
                     }
@@ -1251,6 +1256,8 @@ fn close_recording_windows(finished: &ActiveRecording) {
         indicator.close();
     }
     super::draw_overlay::stop();
+    #[cfg(feature = "webcam")]
+    super::webcam::stop();
 }
 
 /// Joins the recorded segments, then hands the result to the thumbnail card.
@@ -1493,10 +1500,30 @@ fn create_recording_hud(
         });
         content.append(&mic_button);
 
-        // Cam + draw land with the webcam bubble and draw-on-screen phases.
-        let cam_button = hud_button("cam", "Webcam — coming soon");
-        cam_button.set_sensitive(false);
-        content.append(&cam_button);
+        #[cfg(feature = "webcam")]
+        {
+            let cam_button = hud_button("cam", "Webcam bubble");
+            if crate::config::get().webcam_enabled {
+                cam_button.add_css_class("on");
+            }
+            cam_button.connect_clicked(move |button| {
+                super::webcam::toggle(monitor);
+                if super::webcam::is_active() {
+                    button.add_css_class("on");
+                    set_hud_button_icon(button, "cam");
+                } else {
+                    button.remove_css_class("on");
+                    set_hud_button_icon(button, "cam-off");
+                }
+            });
+            content.append(&cam_button);
+        }
+        #[cfg(not(feature = "webcam"))]
+        {
+            let cam_button = hud_button("cam", "Webcam — built without the webcam feature");
+            cam_button.set_sensitive(false);
+            content.append(&cam_button);
+        }
         let draw_button = hud_button("draw", "Draw on screen · Esc exits");
         draw_button.connect_clicked(move |button| {
             super::draw_overlay::toggle(monitor);

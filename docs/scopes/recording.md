@@ -40,6 +40,6 @@ Recording `Area`, `Window`, and `Monitor` are implemented.
 - `Record -> Window` currently records the selected window geometry and does not follow moved windows.
 - The thumbnail uses a generated poster frame rather than embedded playback.
 - The HUD draw button toggles the draw-on-screen overlay (ADR-0020);
-  the cam button is a placeholder until the webcam bubble lands.
+  the cam button toggles the webcam bubble (ADR-0019, feature `webcam`).
 
 Screenshot flow remains the reference for general hide/show timing.

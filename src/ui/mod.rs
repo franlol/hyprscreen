@@ -6,3 +6,5 @@ pub mod icons;
 pub mod main_window;
 pub mod thumbnail;
 pub mod toast;
+#[cfg(feature = "webcam")]
+pub mod webcam;

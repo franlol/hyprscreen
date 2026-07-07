@@ -124,6 +124,15 @@ Conventional commits, matching existing history:
 
 Examples from history: `fix: embed icons, self-detach from terminal, no main-window flash on CLI flow`, `chore(pkg): v0.1.2 sha256`, `fix: force Adwaita theme to silence broken-theme GTK warnings (v0.1.2)`.
 
+
+## Runtime dependencies (v2)
+
+The default build (feature `webcam`) needs GStreamer at build time and the
+`gst-plugin-gtk4` package at runtime for the webcam bubble; without the
+plugin the bubble degrades to an error toast. Build with
+`cargo build --release --no-default-features` to drop the GStreamer
+dependency entirely.
+
 ## Gotchas
 
 - **PKGBUILD references its own future tarball.** The PKGBUILD hash describes a tarball that GitHub only generates after the tag is pushed. Always tag → hash → PKGBUILD update, in that order. Don't try to push the PKGBUILD with the real hash before the tag exists.

@@ -18,6 +18,10 @@
 - `audio_device`
 - `hud_style`
 - `annotate_default_color`
+- `webcam_enabled`
+- `webcam_device`
+- `webcam_size`
+- `webcam_position`
 - `default_mode`
 - `default_target`
 - `show_recording_hud`
@@ -43,6 +47,7 @@
 - `record_audio` (default `false`) and optional `audio_device` map to wf-recorder `-a` / `--audio=<device>`.
 - `hud_style` is `full` (default; pause/restart/mic/stop) or `compact` (v1 pill).
 - `annotate_default_color` (default `#5EE6D0`) selects the annotation editor's initial ink.
+- `webcam_enabled` (default `false`) starts the webcam bubble with every recording; `webcam_device` (default `/dev/video0`), `webcam_size` (default `132`), and `webcam_position` (`bottom-left|bottom-right|top-left|top-right`) shape it (ADR-0019).
 - `default_mode` and `default_target` define the initial UI selection.
 - `show_recording_hud` defines the default state of the recording HUD switch.
 - The recording indicator cadence is controlled by `recording_indicator_enabled`, `recording_indicator_interval_seconds`, and `recording_indicator_duration_ms`.
@@ -80,6 +85,15 @@ save_dir_recordings=~/Videos/Recordings
 # Integration
 open_video_command=mpv
 reveal_folder_command=thunar
+
+# Annotation
+annotate_default_color=#5EE6D0
+
+# Webcam bubble (feature "webcam")
+webcam_enabled=false
+webcam_device=/dev/video0
+webcam_size=132
+webcam_position=bottom-left
 
 # Naming
 filename_prefix=hyprscreen
