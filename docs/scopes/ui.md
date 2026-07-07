@@ -6,6 +6,7 @@
 - Quick-settings popover (delay, pointer, recording HUD)
 - Corner thumbnail card after capture (ADR-0013)
 - Toast feedback windows (ADR-0014)
+- Annotation editor for screenshots (ADR-0018)
 - Recording HUD
 - Monitor identifier overlays during `Monitor` selection
 
@@ -14,7 +15,8 @@
 - Main flow uses one window: the horizontal Capture Dock, floating
   bottom-center on the focused monitor (34px above the edge), sized to content.
 - Extra-window whitelist: recording HUD, monitor identification overlays,
-  corner thumbnail, toast (ADR-0002 as amended by 0008/0013/0014).
+  corner thumbnail, toast, countdown, annotation editor
+  (ADR-0002 as amended by 0008/0013/0014/0015/0018).
 - Post-capture results appear in the corner thumbnail card; with
   `autosave=true` they are already saved, otherwise pinned until Save.
 - All transient feedback (success/error) is a toast; the dock has no status line.

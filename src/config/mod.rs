@@ -39,6 +39,7 @@ pub struct AppConfig {
     pub record_audio: bool,
     pub audio_device: Option<String>,
     pub hud_style: HudStyle,
+    pub annotate_default_color: String,
     pub default_mode: DefaultMode,
     pub default_target: DefaultTarget,
     pub show_recording_hud: bool,
@@ -67,6 +68,7 @@ impl Default for AppConfig {
             record_audio: false,
             audio_device: None,
             hud_style: HudStyle::Full,
+            annotate_default_color: "#5EE6D0".to_string(),
             default_mode: DefaultMode::Screenshot,
             default_target: DefaultTarget::Area,
             show_recording_hud: true,
@@ -122,6 +124,11 @@ fn load() -> AppConfig {
             .filter(|value| !value.is_empty())
             .cloned(),
         hud_style: parse_hud_style(pairs.get("hud_style")).unwrap_or(defaults.hud_style),
+        annotate_default_color: pairs
+            .get("annotate_default_color")
+            .filter(|value| value.starts_with('#') && value.len() == 7)
+            .cloned()
+            .unwrap_or(defaults.annotate_default_color),
         default_mode: parse_default_mode(pairs.get("default_mode"))
             .unwrap_or(defaults.default_mode),
         default_target: parse_default_target(pairs.get("default_target"))

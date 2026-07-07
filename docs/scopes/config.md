@@ -17,6 +17,7 @@
 - `record_audio`
 - `audio_device`
 - `hud_style`
+- `annotate_default_color`
 - `default_mode`
 - `default_target`
 - `show_recording_hud`
@@ -41,6 +42,7 @@
 - `recording_format` is `mp4` (default) or `webm` (ADR-0017).
 - `record_audio` (default `false`) and optional `audio_device` map to wf-recorder `-a` / `--audio=<device>`.
 - `hud_style` is `full` (default; pause/restart/mic/stop) or `compact` (v1 pill).
+- `annotate_default_color` (default `#5EE6D0`) selects the annotation editor's initial ink.
 - `default_mode` and `default_target` define the initial UI selection.
 - `show_recording_hud` defines the default state of the recording HUD switch.
 - The recording indicator cadence is controlled by `recording_indicator_enabled`, `recording_indicator_interval_seconds`, and `recording_indicator_duration_ms`.

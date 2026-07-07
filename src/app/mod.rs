@@ -925,4 +925,120 @@ window.hs-hud-window .hs-hud {
     animation: none;
     opacity: 0.4;
 }
+
+
+/* ═══════════════ Annotation editor (ADR-0018) ═══════════════ */
+
+window.hs-annot-window {
+    background: rgba(19, 20, 26, 0.86);
+}
+
+.hs-annot-top {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.hs-annot-title {
+    color: #EDEEF2;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+.hs-annot-close {
+    border: none;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 7px;
+    padding: 0;
+    min-height: 0;
+}
+
+.hs-annot-close:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.hs-annot-tools {
+    padding: 10px 8px;
+    border-right: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.hs-atool {
+    border: none;
+    background: transparent;
+    border-radius: 9px;
+    padding: 0;
+    min-height: 0;
+    transition: all 120ms;
+}
+
+.hs-atool:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.hs-atool:checked {
+    background: rgba(94, 230, 208, 0.16);
+    box-shadow: 0 0 0 1px #5EE6D0 inset;
+}
+
+.hs-annot-foot {
+    padding: 10px 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.hs-af-sw {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    padding: 0;
+    min-height: 0;
+}
+
+.hs-af-sw:checked {
+    border-color: #FFFFFF;
+}
+
+.hs-af-sw.sw0 { background: #5EE6D0; }
+.hs-af-sw.sw1 { background: #FF5D5D; }
+.hs-af-sw.sw2 { background: #FFD23F; }
+.hs-af-sw.sw3 { background: #7CA8FF; }
+.hs-af-sw.sw4 { background: #FFFFFF; }
+
+.hs-af-btn {
+    border: none;
+    border-radius: 9px;
+    padding: 0 14px;
+    min-height: 34px;
+    font-size: 12px;
+    font-weight: 600;
+    transition: filter 120ms;
+}
+
+.hs-af-btn.ghost {
+    background: rgba(255, 255, 255, 0.05);
+    color: #EDEEF2;
+    margin-right: 8px;
+}
+
+.hs-af-btn.ghost:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.hs-af-btn.solid {
+    background: #5EE6D0;
+    color: #06231F;
+}
+
+.hs-af-btn.solid:hover {
+    filter: brightness(1.07);
+}
+
+entry.hs-annot-entry {
+    background: rgba(19, 20, 26, 0.92);
+    color: #EDEEF2;
+    border: 1px solid #5EE6D0;
+    border-radius: 7px;
+    padding: 5px 8px;
+    font-size: 13px;
+    min-height: 0;
+    caret-color: #5EE6D0;
+}
 "#;

@@ -450,6 +450,7 @@ name = "hyprscreen"
 version = "0.1.5"
 dependencies = [
  "anyhow",
+ "cairo-rs",
  "chrono",
  "glib",
  "gtk4",

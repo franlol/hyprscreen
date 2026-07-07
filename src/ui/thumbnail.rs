@@ -236,8 +236,28 @@ pub fn show(info: ThumbInfo) {
         .build();
 
     let annotate_button = thumb_button("pen", "Annotate", false);
-    annotate_button.set_sensitive(false);
-    annotate_button.set_tooltip_text(Some("Annotate — coming soon"));
+    annotate_button.set_sensitive(kind == ThumbKind::Screenshot);
+    if kind == ThumbKind::Recording {
+        annotate_button.set_tooltip_text(Some("Annotation is for screenshots"));
+    }
+    let data_for_annotate = data.clone();
+    let picture_for_annotate = picture.clone();
+    let meta_for_annotate = meta_label.clone();
+    annotate_button.connect_clicked(move |_| {
+        let path = data_for_annotate.borrow().info.file_path.clone();
+        let picture = picture_for_annotate.clone();
+        let meta_label = meta_for_annotate.clone();
+        let data = data_for_annotate.clone();
+        super::annotate::open(&path, move |new_path| {
+            // Refresh the card with the annotated result.
+            picture.set_file(Some(&gio::File::for_path(new_path)));
+            {
+                let mut d = data.borrow_mut();
+                d.info.meta = screenshot_meta(new_path);
+            }
+            update_meta(&meta_label, &data.borrow().info);
+        });
+    });
     bar.append(&annotate_button);
 
     let copy_button = thumb_button("copy", "Copy", true);
@@ -251,7 +271,7 @@ pub fn show(info: ThumbInfo) {
             (d.info.file_path.clone(), d.info.kind, d.info.meta.clone())
         };
         let result = match kind {
-            ThumbKind::Screenshot => copy_image_to_clipboard(&path),
+            ThumbKind::Screenshot => copy_image_file_to_clipboard(&path),
             ThumbKind::Recording => copy_uri_to_clipboard(&path),
         };
         match result {
@@ -478,7 +498,7 @@ fn file_name_of(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-fn copy_image_to_clipboard(path: &Path) -> anyhow::Result<()> {
+pub(crate) fn copy_image_file_to_clipboard(path: &Path) -> anyhow::Result<()> {
     let mut child = Command::new("wl-copy")
         .arg("--type")
         .arg("image/png")

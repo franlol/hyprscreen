@@ -9,6 +9,7 @@ authors = ["franlol"]
 
 [dependencies]
 anyhow = "1.0"
+cairo-rs = { version = "0.20", features = ["png"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 glib = "0.20"
 gtk = { version = "0.9", package = "gtk4", features = ["v4_8"] }
