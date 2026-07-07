@@ -29,12 +29,39 @@ enum Target {
     Monitor,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingAction {
+    None,
+    Pause,
+    Restart,
+}
+
 struct ActiveRecording {
-    child: Child,
+    /// `None` while paused (the segment process has exited).
+    child: Option<Child>,
+    /// The segment currently being written (or last written while paused).
     temp_path: PathBuf,
+    /// Completed earlier segments (pause/resume, ADR-0016).
+    segments: Vec<PathBuf>,
+    spec: crate::capture::record::LaunchSpec,
+    /// First segment's path; later segments derive their names from it.
+    base_path: PathBuf,
+    seg_index: u32,
     hud_window: Option<gtk::Window>,
     indicator_window: Option<gtk::Window>,
-    started_at: Instant,
+    accumulated: Duration,
+    segment_started: Option<Instant>,
+    pending: PendingAction,
+}
+
+impl ActiveRecording {
+    fn elapsed(&self) -> Duration {
+        self.accumulated
+            + self
+                .segment_started
+                .map(|t| t.elapsed())
+                .unwrap_or_default()
+    }
 }
 
 pub fn build(
@@ -82,6 +109,8 @@ fn build_dock(
     let default_is_record = config.default_mode == crate::config::DefaultMode::Record;
 
     let delay_secs = Rc::new(Cell::new(0_u64));
+    let format_cell = Rc::new(Cell::new(config.recording_format));
+    let audio_cell = Rc::new(Cell::new(config.record_audio));
 
     window.add_css_class(if default_is_record {
         "hs-mode-rec"
@@ -308,7 +337,87 @@ fn build_dock(
         }
     ));
 
-    // Recording HUD row (record mode only)
+    // ── Record-only rows: format, audio, HUD ──────────────────
+    let rec_rows = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(14)
+        .build();
+
+    // Format (MP4/WEBM; GIF stays post-capture per ADR-0010/0017)
+    let format_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .build();
+    let format_header = gtk::Label::builder()
+        .label("FORMAT")
+        .halign(gtk::Align::Start)
+        .css_classes(["hs-qlabel"])
+        .build();
+    let fseg = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(3)
+        .homogeneous(true)
+        .css_classes(["hs-qseg"])
+        .build();
+    let formats = [
+        (crate::capture::record::RecordingFormat::Mp4, "MP4"),
+        (crate::capture::record::RecordingFormat::Webm, "WEBM"),
+    ];
+    let format_buttons: Vec<gtk::ToggleButton> = formats
+        .iter()
+        .map(|(_, text)| {
+            let b = gtk::ToggleButton::builder()
+                .label(*text)
+                .css_classes(["hs-qseg-btn"])
+                .build();
+            b.set_can_focus(false);
+            fseg.append(&b);
+            b
+        })
+        .collect();
+    for (button, (value, _)) in format_buttons.iter().zip(formats.iter()) {
+        button.set_active(*value == format_cell.get());
+        let format_cell = format_cell.clone();
+        let value = *value;
+        let all = format_buttons.clone();
+        button.connect_toggled(move |b| {
+            if b.is_active() {
+                format_cell.set(value);
+                for other in &all {
+                    if other != b {
+                        other.set_active(false);
+                    }
+                }
+            } else if format_cell.get() == value {
+                b.set_active(true);
+            }
+        });
+    }
+    format_row.append(&format_header);
+    format_row.append(&fseg);
+
+    // Audio toggle
+    let audio_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .build();
+    let audio_text = quick_setting_text("Audio", "microphone via wf-recorder");
+    let audio_switch = gtk::Switch::builder()
+        .active(audio_cell.get())
+        .halign(gtk::Align::End)
+        .hexpand(true)
+        .valign(gtk::Align::Center)
+        .css_classes(["hs-switch"])
+        .build();
+    audio_switch.set_can_focus(false);
+    let audio_cell_for_switch = audio_cell.clone();
+    audio_switch.connect_active_notify(move |switch| {
+        audio_cell_for_switch.set(switch.is_active());
+    });
+    audio_row.append(&audio_text);
+    audio_row.append(&audio_switch);
+
+    // Recording HUD row
     let hud_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(10)
@@ -324,7 +433,6 @@ fn build_dock(
     hud_toggle.set_can_focus(false);
     hud_row.append(&hud_text);
     hud_row.append(&hud_toggle);
-    hud_row.set_visible(default_is_record);
 
     hud_toggle.connect_active_notify(glib::clone!(
         #[strong]
@@ -334,9 +442,14 @@ fn build_dock(
         }
     ));
 
+    rec_rows.append(&format_row);
+    rec_rows.append(&audio_row);
+    rec_rows.append(&hud_row);
+    rec_rows.set_visible(default_is_record);
+
     qbody.append(&delay_row);
     qbody.append(&pointer_row);
-    qbody.append(&hud_row);
+    qbody.append(&rec_rows);
     qpop.set_child(Some(&qbody));
     more.set_popover(Some(&qpop));
 
@@ -377,8 +490,8 @@ fn build_dock(
         record_button,
         #[weak]
         cta_button,
-        #[weak]
-        hud_row,
+        #[weak(rename_to = rec_rows)]
+        rec_rows,
         #[weak]
         pointer_button,
         #[weak]
@@ -402,7 +515,7 @@ fn build_dock(
                 }
                 shot_seg_icon.set_paintable(Some(&icon_texture("shot", 15, "#5EE6D0")));
                 rec_seg_icon.set_paintable(Some(&icon_texture("rec", 15, "#9A9CA6")));
-                hud_row.set_visible(false);
+                rec_rows.set_visible(false);
                 pointer_button.set_sensitive(true);
                 pointer_button.set_tooltip_text(Some(if pointer_button.is_active() {
                     "Pointer: on"
@@ -422,8 +535,8 @@ fn build_dock(
         record_button,
         #[weak]
         cta_button,
-        #[weak]
-        hud_row,
+        #[weak(rename_to = rec_rows)]
+        rec_rows,
         #[weak]
         pointer_button,
         #[weak]
@@ -447,7 +560,7 @@ fn build_dock(
                 }
                 shot_seg_icon.set_paintable(Some(&icon_texture("shot", 15, "#9A9CA6")));
                 rec_seg_icon.set_paintable(Some(&icon_texture("rec", 15, "#FF5D5D")));
-                hud_row.set_visible(true);
+                rec_rows.set_visible(true);
                 pointer_button.set_sensitive(false);
                 pointer_button.set_tooltip_text(Some("wf-recorder always records the pointer"));
             }
@@ -492,6 +605,10 @@ fn build_dock(
         show_recording_hud,
         #[strong]
         delay_secs,
+        #[strong]
+        format_cell,
+        #[strong]
+        audio_cell,
         move |_| {
             let target = active_target(&area_button, &window_button);
             let delay = delay_secs.get();
@@ -515,6 +632,8 @@ fn build_dock(
                 target,
                 show_hud,
                 delay,
+                format_cell.get(),
+                &audio_cell,
                 &cta_button,
             );
         }
@@ -877,12 +996,15 @@ fn start_recording_action(
     target: Target,
     show_hud: bool,
     delay_secs: u64,
+    format: crate::capture::record::RecordingFormat,
+    audio_cell: &Rc<Cell<bool>>,
     fire_button: &gtk::Button,
 ) {
     let window = window.clone();
     let recording_state = recording_state.clone();
     let setup_cta = setup_cta.clone();
     let fire_button = fire_button.clone();
+    let audio_cell = audio_cell.clone();
 
     fire_button.set_sensitive(false);
     window.set_visible(false);
@@ -947,10 +1069,12 @@ fn start_recording_action(
             let recording_state2 = recording_state.clone();
             let setup_cta2 = setup_cta.clone();
             let fire_button2 = fire_button.clone();
+            let audio_cell2 = audio_cell.clone();
 
             let proceed = move || {
                 wait_compositor_frame(move || {
-                    match crate::capture::record::launch_recording(selection) {
+                    let audio = audio_cell2.get();
+                    match crate::capture::record::launch_recording(selection, format, audio) {
                         Err(error) => {
                             report_capture_error(
                                 "Recording failed",
@@ -960,13 +1084,17 @@ fn start_recording_action(
                             );
                         }
                         Ok(session) => {
+                            let monitor = session.monitor;
                             let hud_window = if show_hud {
-                                Some(create_recording_hud(&recording_state2))
+                                Some(create_recording_hud(
+                                    &recording_state2,
+                                    &audio_cell2,
+                                    monitor,
+                                ))
                             } else {
                                 None
                             };
 
-                            let monitor = session.monitor;
                             let indicator_window = if show_hud {
                                 None
                             } else if crate::config::get().recording_indicator_enabled {
@@ -978,11 +1106,17 @@ fn start_recording_action(
                             };
 
                             *recording_state2.borrow_mut() = Some(ActiveRecording {
-                                child: session.child,
+                                child: Some(session.child),
+                                base_path: session.temp_path.clone(),
                                 temp_path: session.temp_path,
+                                segments: Vec::new(),
+                                spec: session.spec,
+                                seg_index: 0,
                                 hud_window,
                                 indicator_window,
-                                started_at: Instant::now(),
+                                accumulated: Duration::ZERO,
+                                segment_started: Some(Instant::now()),
+                                pending: PendingAction::None,
                             });
 
                             start_recording_poll(&window2, &recording_state2, &setup_cta2);
@@ -1017,32 +1151,82 @@ fn start_recording_poll(
             return glib::ControlFlow::Break;
         };
 
-        match active.child.try_wait() {
-            Ok(Some(status)) => {
+        // `hyprscreen stop` while paused: there is no live segment process,
+        // so the CLI leaves a stop request for us instead (ADR-0016).
+        if active.child.is_none() {
+            if crate::capture::record::take_stop_request() {
                 let finished = borrowed.take().expect("active recording disappeared");
                 drop(borrowed);
-
-                if let Some(hud) = finished.hud_window {
-                    hud.close();
-                }
-                if let Some(indicator) = finished.indicator_window {
-                    indicator.close();
-                }
-                crate::capture::record::clear_state_file();
-                window.present();
-                enable_setup_cta(&setup_cta);
-
-                if !status.success() || !finished.temp_path.exists() {
-                    toast::error("Recording failed", "the recording was cancelled or crashed");
-                    return glib::ControlFlow::Break;
-                }
-
-                match thumbnail::for_recording(finished.temp_path) {
-                    Ok(info) => thumbnail::show(info),
-                    Err(error) => toast::error("Recording preview failed", &error.to_string()),
-                }
-                glib::ControlFlow::Break
+                finish_recording(finished, &window, &setup_cta);
+                return glib::ControlFlow::Break;
             }
+            return glib::ControlFlow::Continue;
+        }
+
+        let wait_result = active.child.as_mut().expect("checked above").try_wait();
+        match wait_result {
+            Ok(Some(status)) => match active.pending {
+                PendingAction::Pause => {
+                    active.child = None;
+                    active.pending = PendingAction::None;
+                    active.segments.push(active.temp_path.clone());
+                    crate::capture::record::mark_state_paused();
+                    glib::ControlFlow::Continue
+                }
+                PendingAction::Restart => {
+                    active.pending = PendingAction::None;
+                    let _ = std::fs::remove_file(&active.temp_path);
+                    for segment in active.segments.drain(..) {
+                        let _ = std::fs::remove_file(segment);
+                    }
+                    active.seg_index = 0;
+                    active.accumulated = Duration::ZERO;
+                    match crate::capture::record::spawn_segment(&active.spec, &active.base_path) {
+                        Ok(child) => {
+                            crate::capture::record::mark_state_resumed(
+                                child.id(),
+                                &active.base_path,
+                            );
+                            active.temp_path = active.base_path.clone();
+                            active.child = Some(child);
+                            active.segment_started = Some(Instant::now());
+                            glib::ControlFlow::Continue
+                        }
+                        Err(error) => {
+                            let finished =
+                                borrowed.take().expect("active recording disappeared");
+                            drop(borrowed);
+                            close_recording_windows(&finished);
+                            crate::capture::record::clear_state_file();
+                            window.present();
+                            enable_setup_cta(&setup_cta);
+                            toast::error("Restart failed", &error.to_string());
+                            glib::ControlFlow::Break
+                        }
+                    }
+                }
+                PendingAction::None => {
+                    let mut finished = borrowed.take().expect("active recording disappeared");
+                    drop(borrowed);
+                    finished.segments.push(finished.temp_path.clone());
+
+                    let has_output = finished.segments.iter().any(|p| p.exists());
+                    if !has_output && !status.success() {
+                        close_recording_windows(&finished);
+                        crate::capture::record::clear_state_file();
+                        window.present();
+                        enable_setup_cta(&setup_cta);
+                        toast::error(
+                            "Recording failed",
+                            "the recording was cancelled or crashed",
+                        );
+                        return glib::ControlFlow::Break;
+                    }
+
+                    finish_recording(finished, &window, &setup_cta);
+                    glib::ControlFlow::Break
+                }
+            },
             Ok(None) => glib::ControlFlow::Continue,
             Err(error) => {
                 drop(borrowed);
@@ -1054,6 +1238,35 @@ fn start_recording_poll(
             }
         }
     });
+}
+
+fn close_recording_windows(finished: &ActiveRecording) {
+    if let Some(hud) = &finished.hud_window {
+        hud.close();
+    }
+    if let Some(indicator) = &finished.indicator_window {
+        indicator.close();
+    }
+}
+
+/// Joins the recorded segments, then hands the result to the thumbnail card.
+fn finish_recording(
+    finished: ActiveRecording,
+    window: &gtk::ApplicationWindow,
+    setup_cta: &Rc<RefCell<Option<gtk::Button>>>,
+) {
+    close_recording_windows(&finished);
+    crate::capture::record::clear_state_file();
+    window.present();
+    enable_setup_cta(setup_cta);
+
+    let format = finished.spec.format;
+    match crate::capture::record::finalize_segments(finished.segments, format)
+        .and_then(thumbnail::for_recording)
+    {
+        Ok(info) => thumbnail::show(info),
+        Err(error) => toast::error("Recording preview failed", &error.to_string()),
+    }
 }
 
 /// Parses a slurp-style "x,y wxh" geometry into a region tuple.
@@ -1105,71 +1318,206 @@ fn enable_setup_cta(setup_cta: &Rc<RefCell<Option<gtk::Button>>>) {
     }
 }
 
-fn create_recording_hud(recording_state: &Rc<RefCell<Option<ActiveRecording>>>) -> gtk::Window {
+fn create_recording_hud(
+    recording_state: &Rc<RefCell<Option<ActiveRecording>>>,
+    audio_cell: &Rc<Cell<bool>>,
+    monitor: crate::capture::record::MonitorPlacement,
+) -> gtk::Window {
+    let full = crate::config::get().hud_style == crate::config::HudStyle::Full;
+
     let hud = gtk::Window::builder()
         .title("Hyprscreen HUD")
         .decorated(false)
         .resizable(false)
         .build();
+    hud.add_css_class("hs-hud-window");
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
+        .spacing(if full { 4 } else { 12 })
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
         .css_classes(["hs-hud"])
         .build();
 
-    // Red pulse dot
     let rec_dot = gtk::Box::builder()
         .width_request(9)
         .height_request(9)
         .valign(gtk::Align::Center)
         .css_classes(["hs-hud-dot"])
         .build();
-
-    // REC label
     let rec_label = gtk::Label::builder()
         .label("REC")
         .css_classes(["hs-hud-rec"])
         .build();
-
-    // Timer
     let counter = gtk::Label::builder()
         .label("00:00")
         .css_classes(["hs-hud-timer"])
         .build();
 
-    // Separator
-    let sep = gtk::Box::builder()
-        .width_request(1)
-        .height_request(16)
+    let status_cluster = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(9)
+        .margin_end(if full { 6 } else { 0 })
         .valign(gtk::Align::Center)
-        .css_classes(["hs-hud-sep"])
         .build();
+    status_cluster.append(&rec_dot);
+    status_cluster.append(&rec_label);
+    status_cluster.append(&counter);
+    content.append(&status_cluster);
+    content.append(&make_dock_divider());
 
-    // Stop button
+    if full {
+        // Pause / resume (segmented recording, ADR-0016)
+        let pause_button = hud_button("pause", "Pause");
+        let pause_state = recording_state.clone();
+        let audio_for_resume = audio_cell.clone();
+        let dot_for_pause = rec_dot.clone();
+        let label_for_pause = rec_label.clone();
+        pause_button.connect_clicked(move |button| {
+            let mut borrowed = pause_state.borrow_mut();
+            let Some(active) = borrowed.as_mut() else {
+                return;
+            };
+            if let Some(child) = &active.child {
+                if active.pending != PendingAction::None {
+                    return;
+                }
+                // Pause: end the current segment; the poll reaps it.
+                active.pending = PendingAction::Pause;
+                if let Some(started) = active.segment_started.take() {
+                    active.accumulated += started.elapsed();
+                }
+                unsafe {
+                    libc::kill(child.id() as i32, libc::SIGINT);
+                }
+                dot_for_pause.add_css_class("paused");
+                label_for_pause.set_label("PAUSED");
+                set_hud_button_icon(button, "play");
+                button.set_tooltip_text(Some("Resume"));
+            } else {
+                // Resume: spawn the next segment with identical parameters
+                // (audio may have been toggled meanwhile).
+                active.spec.audio = audio_for_resume.get();
+                active.seg_index += 1;
+                let path =
+                    crate::capture::record::segment_path(&active.base_path, active.seg_index);
+                match crate::capture::record::spawn_segment(&active.spec, &path) {
+                    Ok(child) => {
+                        crate::capture::record::mark_state_resumed(child.id(), &path);
+                        active.temp_path = path;
+                        active.child = Some(child);
+                        active.segment_started = Some(Instant::now());
+                        dot_for_pause.remove_css_class("paused");
+                        label_for_pause.set_label("REC");
+                        set_hud_button_icon(button, "pause");
+                        button.set_tooltip_text(Some("Pause"));
+                    }
+                    Err(error) => {
+                        drop(borrowed);
+                        toast::error("Resume failed", &error.to_string());
+                    }
+                }
+            }
+        });
+        content.append(&pause_button);
+
+        // Restart: drop everything recorded so far, start over.
+        let restart_button = hud_button("restart", "Restart recording");
+        let restart_state = recording_state.clone();
+        let dot_for_restart = rec_dot.clone();
+        let label_for_restart = rec_label.clone();
+        let pause_for_restart = pause_button.clone();
+        restart_button.connect_clicked(move |_| {
+            let mut borrowed = restart_state.borrow_mut();
+            let Some(active) = borrowed.as_mut() else {
+                return;
+            };
+            active.accumulated = Duration::ZERO;
+            if let Some(child) = &active.child {
+                active.pending = PendingAction::Restart;
+                active.segment_started = Some(Instant::now());
+                unsafe {
+                    libc::kill(child.id() as i32, libc::SIGINT);
+                }
+            } else {
+                // Paused: restart synchronously.
+                let _ = std::fs::remove_file(&active.temp_path);
+                for segment in active.segments.drain(..) {
+                    let _ = std::fs::remove_file(segment);
+                }
+                active.seg_index = 0;
+                match crate::capture::record::spawn_segment(&active.spec, &active.base_path) {
+                    Ok(child) => {
+                        crate::capture::record::mark_state_resumed(child.id(), &active.base_path);
+                        active.temp_path = active.base_path.clone();
+                        active.child = Some(child);
+                        active.segment_started = Some(Instant::now());
+                        dot_for_restart.remove_css_class("paused");
+                        label_for_restart.set_label("REC");
+                        set_hud_button_icon(&pause_for_restart, "pause");
+                        pause_for_restart.set_tooltip_text(Some("Pause"));
+                    }
+                    Err(error) => {
+                        drop(borrowed);
+                        toast::error("Restart failed", &error.to_string());
+                    }
+                }
+            }
+        });
+        content.append(&restart_button);
+
+        // Mic reflects the shared audio flag; wf-recorder cannot re-route
+        // audio mid-segment, so changes apply from the next pause/resume.
+        let mic_button = hud_button(
+            if audio_cell.get() { "mic" } else { "mic-off" },
+            "Microphone · applies after pause/resume",
+        );
+        if !audio_cell.get() {
+            mic_button.add_css_class("off");
+        }
+        let audio_for_mic = audio_cell.clone();
+        mic_button.connect_clicked(move |button| {
+            let enabled = !audio_for_mic.get();
+            audio_for_mic.set(enabled);
+            set_hud_button_icon(button, if enabled { "mic" } else { "mic-off" });
+            if enabled {
+                button.remove_css_class("off");
+            } else {
+                button.add_css_class("off");
+            }
+        });
+        content.append(&mic_button);
+
+        // Cam + draw land with the webcam bubble and draw-on-screen phases.
+        let cam_button = hud_button("cam", "Webcam — coming soon");
+        cam_button.set_sensitive(false);
+        content.append(&cam_button);
+        let draw_button = hud_button("draw", "Draw on screen — coming soon");
+        draw_button.set_sensitive(false);
+        content.append(&draw_button);
+
+        content.append(&make_dock_divider());
+    }
+
     let stop = gtk::Button::builder().css_classes(["hs-hud-stop"]).build();
+    if full {
+        stop.set_margin_start(4);
+    }
     set_button_text(&stop, "STOP");
-
-    content.append(&rec_dot);
-    content.append(&rec_label);
-    content.append(&counter);
-    content.append(&sep);
-    content.append(&stop);
-    hud.set_child(Some(&content));
-
     stop.connect_clicked(move |_| {
         let _ = crate::capture::record::stop_active_recording();
     });
+    content.append(&stop);
+    hud.set_child(Some(&content));
 
     let recording_state_for_timer = recording_state.clone();
-    glib::timeout_add_local(Duration::from_secs(1), move || {
+    glib::timeout_add_local(Duration::from_millis(500), move || {
         let borrowed = recording_state_for_timer.borrow();
         let Some(active) = borrowed.as_ref() else {
             return glib::ControlFlow::Break;
         };
-        let elapsed = active.started_at.elapsed().as_secs();
+        let elapsed = active.elapsed().as_secs();
         let m = elapsed / 60;
         let s = elapsed % 60;
         counter.set_label(&format!("{m:02}:{s:02}"));
@@ -1177,7 +1525,46 @@ fn create_recording_hud(recording_state: &Rc<RefCell<Option<ActiveRecording>>>) 
     });
 
     hud.present();
+    crate::hyprland::make_window_plain("Hyprscreen HUD");
+    position_hud(&hud, monitor);
     hud
+}
+
+fn hud_button(icon_key: &str, tip: &str) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .width_request(36)
+        .height_request(36)
+        .valign(gtk::Align::Center)
+        .css_classes(["hs-hb"])
+        .build();
+    button.set_tooltip_text(Some(tip));
+    let icon = icon_image(icon_key, 17, None);
+    icon.set_halign(gtk::Align::Center);
+    icon.set_valign(gtk::Align::Center);
+    button.set_child(Some(&icon));
+    button
+}
+
+fn set_hud_button_icon(button: &gtk::Button, icon_key: &str) {
+    if let Some(image) = button
+        .child()
+        .and_then(|child| child.downcast::<gtk::Image>().ok())
+    {
+        image.set_paintable(Some(&icon_texture(icon_key, 17, "#EDEEF2")));
+    }
+}
+
+fn position_hud(window: &gtk::Window, monitor: crate::capture::record::MonitorPlacement) {
+    let window = window.clone();
+    glib::timeout_add_local_once(Duration::from_millis(50), move || {
+        let (w, _h) = (window.width(), window.height());
+        if w <= 1 {
+            return;
+        }
+        let x = monitor.x + ((monitor.width - w) / 2).max(0);
+        let y = monitor.y + 18;
+        crate::hyprland::place_window_exact("Hyprscreen HUD", x, y);
+    });
 }
 
 fn show_monitor_identifiers(monitors: &[crate::hyprland::Monitor]) -> Vec<gtk::Window> {

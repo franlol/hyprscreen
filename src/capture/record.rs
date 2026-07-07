@@ -32,11 +32,44 @@ pub struct VideoPreviewInfo {
     pub metadata_summary: String,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RecordingFormat {
+    Mp4,
+    Webm,
+}
+
+impl RecordingFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Mp4 => "mp4",
+            Self::Webm => "webm",
+        }
+    }
+}
+
+/// Everything needed to (re)spawn a wf-recorder segment with identical
+/// parameters — the basis of pause/resume via segmented recording (ADR-0016).
+#[derive(Debug, Clone)]
+pub struct LaunchSpec {
+    pub target: LaunchTarget,
+    pub format: RecordingFormat,
+    pub audio: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum LaunchTarget {
+    /// Pre-inset "x,y wxh" geometry.
+    Geometry(String),
+    /// Hyprland output connector name.
+    Output(String),
+}
+
 #[derive(Debug)]
 pub struct RecordingSession {
     pub child: Child,
     pub temp_path: PathBuf,
     pub monitor: MonitorPlacement,
+    pub spec: LaunchSpec,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,8 +117,21 @@ fn state_file_path() -> PathBuf {
     runtime_dir().join("hyprscreen-recording.json")
 }
 
-fn temp_recording_path() -> Result<PathBuf> {
-    Ok(super::hyprscreen_temp_dir()?.join(crate::capture::generated_filename("mkv")))
+fn temp_recording_path(format: RecordingFormat) -> Result<PathBuf> {
+    Ok(super::hyprscreen_temp_dir()?.join(crate::capture::generated_filename(format.extension())))
+}
+
+/// Path for pause/resume segment `index` derived from the first segment's path.
+pub fn segment_path(base: &Path, index: u32) -> PathBuf {
+    let stem = base
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "recording".into());
+    let ext = base
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "mp4".into());
+    base.with_file_name(format!("{stem}-seg{index}.{ext}"))
 }
 
 pub enum RecordingSelection {
@@ -132,48 +178,142 @@ pub fn select_monitor() -> Result<RecordingSelection> {
     })
 }
 
-pub fn launch_recording(sel: RecordingSelection) -> Result<RecordingSession> {
-    match sel {
+pub fn launch_recording(
+    sel: RecordingSelection,
+    format: RecordingFormat,
+    audio: bool,
+) -> Result<RecordingSession> {
+    let (target, monitor) = match sel {
         RecordingSelection::Geometry { geometry, monitor, is_window } => {
-            let temp_path = temp_recording_path()?;
             let inset_px = if is_window { super::hyprland_window_inset() } else { 2 };
-            let inset = super::inset_geometry(&geometry, inset_px).unwrap_or(geometry.clone());
-            let child = Command::new("wf-recorder")
-                .arg("-g")
-                .arg(&inset)
-                .arg("-f")
-                .arg(&temp_path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .context("failed to launch wf-recorder")?;
-            write_state_file(child.id(), &temp_path)?;
-            Ok(RecordingSession { child, temp_path, monitor })
+            let inset = super::inset_geometry(&geometry, inset_px).unwrap_or(geometry);
+            (LaunchTarget::Geometry(inset), monitor)
         }
         RecordingSelection::OutputName { name, placement } => {
-            let temp_path = temp_recording_path()?;
-            let child = Command::new("wf-recorder")
-                .arg("-o")
-                .arg(&name)
-                .arg("-f")
-                .arg(&temp_path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .context("failed to launch wf-recorder")?;
-            write_state_file(child.id(), &temp_path)?;
-            Ok(RecordingSession { child, temp_path, monitor: placement })
+            (LaunchTarget::Output(name), placement)
+        }
+    };
+    let spec = LaunchSpec { target, format, audio };
+    let temp_path = temp_recording_path(format)?;
+    let child = spawn_segment(&spec, &temp_path)?;
+    write_state_file(child.id(), &temp_path)?;
+    Ok(RecordingSession { child, temp_path, monitor, spec })
+}
+
+/// Spawns one wf-recorder segment for `spec` writing to `path`.
+pub fn spawn_segment(spec: &LaunchSpec, path: &Path) -> Result<Child> {
+    let mut command = Command::new("wf-recorder");
+    match &spec.target {
+        LaunchTarget::Geometry(geometry) => {
+            command.arg("-g").arg(geometry);
+        }
+        LaunchTarget::Output(name) => {
+            command.arg("-o").arg(name);
         }
     }
+    if spec.format == RecordingFormat::Webm {
+        command.arg("-c").arg("libvpx-vp9");
+        if spec.audio {
+            command.arg("-C").arg("libopus");
+        }
+    }
+    if spec.audio {
+        match crate::config::get().audio_device.as_deref() {
+            Some(device) => {
+                command.arg(format!("--audio={device}"));
+            }
+            None => {
+                command.arg("-a");
+            }
+        }
+    }
+    command
+        .arg("-f")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to launch wf-recorder")
+}
+
+/// Joins recorded segments into one file. A single segment passes through;
+/// multiple segments are losslessly concatenated (`ffmpeg -f concat -c copy`
+/// — identical codec parameters, so no re-encode) and then removed.
+pub fn finalize_segments(segments: Vec<PathBuf>, format: RecordingFormat) -> Result<PathBuf> {
+    let mut segments: Vec<PathBuf> = segments.into_iter().filter(|p| p.exists()).collect();
+    match segments.len() {
+        0 => bail!("no recorded segments found"),
+        1 => return Ok(segments.remove(0)),
+        _ => {}
+    }
+
+    let list_path = super::hyprscreen_temp_dir()?.join("concat-list.txt");
+    let mut list = String::new();
+    for segment in &segments {
+        list.push_str(&format!("file '{}'\n", segment.display()));
+    }
+    fs::write(&list_path, list).context("failed to write concat list")?;
+
+    let output_path = temp_recording_path(format)?;
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-f", "concat", "-safe", "0", "-i"])
+        .arg(&list_path)
+        .args(["-c", "copy"])
+        .arg(&output_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("failed to launch ffmpeg for segment concat")?;
+    let _ = fs::remove_file(&list_path);
+
+    if !status.success() {
+        bail!("ffmpeg failed to join the recording segments")
+    }
+    for segment in segments {
+        let _ = fs::remove_file(segment);
+    }
+    Ok(output_path)
 }
 
 pub fn stop_active_recording() -> Result<()> {
     let Ok(state) = read_state_file() else {
         return Ok(());
     };
-    stop_direct_recording(state.pid)
+    // A paused session has no live wf-recorder (pid 0); the GUI poll picks up
+    // the stop request instead (ADR-0016).
+    let _ = fs::write(stop_request_path(), b"stop");
+    if state.pid > 0 {
+        stop_direct_recording(state.pid)?;
+    }
+    Ok(())
+}
+
+fn stop_request_path() -> PathBuf {
+    runtime_dir().join("hyprscreen-stop-requested")
+}
+
+/// True once if a `hyprscreen stop` arrived (consumes the request).
+pub fn take_stop_request() -> bool {
+    let path = stop_request_path();
+    if path.exists() {
+        let _ = fs::remove_file(path);
+        return true;
+    }
+    false
+}
+
+/// Marks the state file as paused so CLI `stop` knows there is no live pid.
+pub fn mark_state_paused() {
+    if let Ok(state) = read_state_file() {
+        let _ = write_state_file(0, &state.temp_path);
+    }
+}
+
+/// Records the pid of a freshly resumed segment.
+pub fn mark_state_resumed(pid: u32, temp_path: &Path) {
+    let _ = write_state_file(pid, temp_path);
 }
 
 fn stop_direct_recording(pid: u32) -> Result<()> {
@@ -192,6 +332,7 @@ fn stop_direct_recording(pid: u32) -> Result<()> {
 
 pub fn clear_state_file() {
     let _ = fs::remove_file(state_file_path());
+    let _ = fs::remove_file(stop_request_path());
 }
 
 
@@ -588,7 +729,7 @@ fn format_video_metadata(
         .map(format_file_size)
         .unwrap_or_else(|| "unknown file size".to_string());
 
-    format!("Temporary recording · {duration} · {resolution} · {file_size}")
+    format!("{duration} · {resolution} · {file_size}")
 }
 
 fn format_duration(duration: f64) -> String {

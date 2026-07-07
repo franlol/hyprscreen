@@ -13,6 +13,10 @@
 - `thumbnail_timeout_seconds`
 - `capture_delay_seconds`
 - `show_pointer`
+- `recording_format`
+- `record_audio`
+- `audio_device`
+- `hud_style`
 - `default_mode`
 - `default_target`
 - `show_recording_hud`
@@ -34,6 +38,9 @@
 - `thumbnail_timeout_seconds` (default `8`, `0` = never) auto-dismisses the auto-saved thumbnail card.
 - `capture_delay_seconds` (default `0`) seeds the dock's delay chip.
 - `show_pointer` (default `true`) seeds the pointer toggle (`grim -c`; screenshots only).
+- `recording_format` is `mp4` (default) or `webm` (ADR-0017).
+- `record_audio` (default `false`) and optional `audio_device` map to wf-recorder `-a` / `--audio=<device>`.
+- `hud_style` is `full` (default; pause/restart/mic/stop) or `compact` (v1 pill).
 - `default_mode` and `default_target` define the initial UI selection.
 - `show_recording_hud` defines the default state of the recording HUD switch.
 - The recording indicator cadence is controlled by `recording_indicator_enabled`, `recording_indicator_interval_seconds`, and `recording_indicator_duration_ms`.
@@ -56,6 +63,9 @@ default_mode=screenshot
 default_target=area
 
 # Recording
+recording_format=mp4
+record_audio=false
+hud_style=full
 show_recording_hud=true
 recording_indicator_enabled=true
 recording_indicator_interval_seconds=5

@@ -22,6 +22,12 @@ pub enum DockStyle {
     Solid,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum HudStyle {
+    Full,
+    Compact,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub dock_style: DockStyle,
@@ -29,6 +35,10 @@ pub struct AppConfig {
     pub thumbnail_timeout_seconds: u64,
     pub capture_delay_seconds: u64,
     pub show_pointer: bool,
+    pub recording_format: crate::capture::record::RecordingFormat,
+    pub record_audio: bool,
+    pub audio_device: Option<String>,
+    pub hud_style: HudStyle,
     pub default_mode: DefaultMode,
     pub default_target: DefaultTarget,
     pub show_recording_hud: bool,
@@ -53,6 +63,10 @@ impl Default for AppConfig {
             thumbnail_timeout_seconds: 8,
             capture_delay_seconds: 0,
             show_pointer: true,
+            recording_format: crate::capture::record::RecordingFormat::Mp4,
+            record_audio: false,
+            audio_device: None,
+            hud_style: HudStyle::Full,
             default_mode: DefaultMode::Screenshot,
             default_target: DefaultTarget::Area,
             show_recording_hud: true,
@@ -100,6 +114,14 @@ fn load() -> AppConfig {
         capture_delay_seconds: parse_u64(pairs.get("capture_delay_seconds"))
             .unwrap_or(defaults.capture_delay_seconds),
         show_pointer: parse_bool(pairs.get("show_pointer")).unwrap_or(defaults.show_pointer),
+        recording_format: parse_recording_format(pairs.get("recording_format"))
+            .unwrap_or(defaults.recording_format),
+        record_audio: parse_bool(pairs.get("record_audio")).unwrap_or(defaults.record_audio),
+        audio_device: pairs
+            .get("audio_device")
+            .filter(|value| !value.is_empty())
+            .cloned(),
+        hud_style: parse_hud_style(pairs.get("hud_style")).unwrap_or(defaults.hud_style),
         default_mode: parse_default_mode(pairs.get("default_mode"))
             .unwrap_or(defaults.default_mode),
         default_target: parse_default_target(pairs.get("default_target"))
@@ -175,6 +197,24 @@ fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn parse_recording_format(
+    value: Option<&String>,
+) -> Option<crate::capture::record::RecordingFormat> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "mp4" => Some(crate::capture::record::RecordingFormat::Mp4),
+        "webm" => Some(crate::capture::record::RecordingFormat::Webm),
+        _ => None,
+    }
+}
+
+fn parse_hud_style(value: Option<&String>) -> Option<HudStyle> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "full" => Some(HudStyle::Full),
+        "compact" => Some(HudStyle::Compact),
+        _ => None,
+    }
 }
 
 fn parse_dock_style(value: Option<&String>) -> Option<DockStyle> {

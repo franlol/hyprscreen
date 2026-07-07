@@ -884,4 +884,45 @@ window.hs-countdown-window.hs-mode-rec .hs-cd-circle {
 .hs-cd-cancel:hover {
     background: rgba(0, 0, 0, 0.7);
 }
+
+
+/* ═══════════════ Full recording HUD (ADR-0016) ═══════════════ */
+
+window.hs-hud-window,
+window.hs-hud-window > * {
+    background: transparent;
+}
+
+window.hs-hud-window .hs-hud {
+    background: rgba(19, 20, 26, 0.90);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 999px;
+    padding: 7px 8px 7px 14px;
+}
+
+.hs-hb {
+    border: none;
+    background: transparent;
+    border-radius: 10px;
+    padding: 0;
+    min-height: 0;
+    transition: all 120ms;
+}
+
+.hs-hb:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.hs-hb:disabled {
+    opacity: 0.3;
+}
+
+.hs-hb.off {
+    background: rgba(255, 93, 93, 0.16);
+}
+
+.hs-hud-dot.paused {
+    animation: none;
+    opacity: 0.4;
+}
 "#;
