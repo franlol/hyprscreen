@@ -8,6 +8,7 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use super::icons::{icon_image, icon_image_colored, icon_texture};
+use super::countdown;
 use super::thumbnail;
 use super::toast;
 
@@ -153,7 +154,7 @@ fn build_dock(
 
     // Pointer toggle (screenshots only — wf-recorder always records the cursor)
     let pointer_button = make_dock_target("pointer", "Pointer: on");
-    pointer_button.set_active(true);
+    pointer_button.set_active(config.show_pointer);
     pointer_button.connect_toggled(|btn| {
         btn.set_tooltip_text(Some(if btn.is_active() {
             "Pointer: on"
@@ -267,6 +268,9 @@ fn build_dock(
             apply_delay(next);
         }
     });
+    if config.capture_delay_seconds > 0 {
+        apply_delay(config.capture_delay_seconds);
+    }
 
     // Pointer row
     let pointer_row = gtk::Box::builder()
@@ -275,7 +279,7 @@ fn build_dock(
         .build();
     let pointer_text = quick_setting_text("Show pointer", "include cursor in capture");
     let pointer_switch = gtk::Switch::builder()
-        .active(true)
+        .active(config.show_pointer)
         .halign(gtk::Align::End)
         .hexpand(true)
         .valign(gtk::Align::Center)
@@ -786,6 +790,11 @@ fn run_capture_action(
                 Ok(s) => s,
             };
 
+            let countdown_region = match target {
+                Target::Monitor => monitor_region_by_name(&selection),
+                _ => parse_region(&selection),
+            };
+
             // Phase 2: CompositorRepaintGuard on the worker thread already waited for
             // closelayer + one frame. This idle hands back to the GTK main loop before
             // spawning the grim thread.
@@ -848,11 +857,12 @@ fn run_capture_action(
                 })
             };
             // The delay counts against the already-chosen geometry (plan: selection first).
-            if delay_secs > 0 {
-                glib::timeout_add_local_once(Duration::from_secs(delay_secs), proceed);
-            } else {
-                proceed();
-            }
+            let cancel_window = window.clone();
+            let cancel_fire = fire_button.clone();
+            countdown::run(delay_secs, countdown_region, false, proceed, move || {
+                cancel_window.present();
+                cancel_fire.set_sensitive(true);
+            });
 
             glib::ControlFlow::Break
         });
@@ -922,6 +932,15 @@ fn start_recording_action(
                 Ok(s) => s,
             };
 
+            let placement = match &selection {
+                crate::capture::record::RecordingSelection::Geometry { monitor, .. } => *monitor,
+                crate::capture::record::RecordingSelection::OutputName { placement, .. } => {
+                    *placement
+                }
+            };
+            let countdown_region =
+                Some((placement.x, placement.y, placement.width, placement.height));
+
             // Phase 2: wait for one compositor frame, then launch wf-recorder.
             // launch_recording is fast (spawn + file write) so runs on the GTK thread.
             let window2 = window.clone();
@@ -971,11 +990,12 @@ fn start_recording_action(
                     }
                 })
             };
-            if delay_secs > 0 {
-                glib::timeout_add_local_once(Duration::from_secs(delay_secs), proceed);
-            } else {
-                proceed();
-            }
+            let cancel_window = window.clone();
+            let cancel_fire = fire_button.clone();
+            countdown::run(delay_secs, countdown_region, true, proceed, move || {
+                cancel_window.present();
+                cancel_fire.set_sensitive(true);
+            });
 
             glib::ControlFlow::Break
         });
@@ -1034,6 +1054,26 @@ fn start_recording_poll(
             }
         }
     });
+}
+
+/// Parses a slurp-style "x,y wxh" geometry into a region tuple.
+fn parse_region(geometry: &str) -> Option<(i32, i32, i32, i32)> {
+    let (pos, size) = geometry.trim().split_once(' ')?;
+    let (x, y) = pos.split_once(',')?;
+    let (w, h) = size.split_once('x')?;
+    Some((
+        x.trim().parse().ok()?,
+        y.trim().parse().ok()?,
+        w.trim().parse().ok()?,
+        h.trim().parse().ok()?,
+    ))
+}
+
+fn monitor_region_by_name(name: &str) -> Option<(i32, i32, i32, i32)> {
+    crate::hyprland::enumerate_monitors()
+        .into_iter()
+        .find(|m| m.name == name)
+        .map(|m| (m.x, m.y, m.width, m.height))
 }
 
 fn report_capture_error(

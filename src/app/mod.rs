@@ -842,4 +842,46 @@ window.hs-toast-window-solid {
 .hs-toast-action.err:hover {
     filter: brightness(1.08);
 }
+
+
+/* ═══════════════ Countdown overlay (ADR-0015) ═══════════════ */
+
+window.hs-countdown-window,
+window.hs-countdown-window > * {
+    background: transparent;
+}
+
+.hs-cd-circle {
+    border-radius: 999px;
+    border: 2px solid rgba(255, 255, 255, 0.18);
+    background: radial-gradient(circle, rgba(94, 230, 208, 0.14), rgba(6, 8, 12, 0.42) 75%);
+}
+
+window.hs-countdown-window.hs-mode-rec .hs-cd-circle {
+    background: radial-gradient(circle, rgba(255, 93, 93, 0.16), rgba(6, 8, 12, 0.42) 75%);
+}
+
+.hs-cd-num {
+    color: #FFFFFF;
+    font-size: 130px;
+    font-weight: 200;
+    text-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+}
+
+.hs-cd-cancel {
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(0, 0, 0, 0.5);
+    color: #EDEEF2;
+    border-radius: 999px;
+    padding: 9px 16px;
+    min-height: 0;
+    font-family: "JetBrains Mono", "Fira Mono", monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+}
+
+.hs-cd-cancel:hover {
+    background: rgba(0, 0, 0, 0.7);
+}
 "#;

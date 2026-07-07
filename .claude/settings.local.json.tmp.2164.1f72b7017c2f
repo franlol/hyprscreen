@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build *)",
+      "Bash(cargo clippy *)",
+      "Bash(gh repo *)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -s https://api.github.com/repos/franlol/hyprscreen)",
+      "Bash(curl -s https://api.github.com/repos/franlol/hyprscreen/languages)",
+      "Bash(curl -s https://api.github.com/repos/franlol/hyprscreen/releases)",
+      "Bash(curl -s https://api.github.com/repos/franlol/hyprscreen/tags)",
+      "Bash(curl -s \"https://api.github.com/repos/franlol/hyprscreen/issues?state=open&per_page=20\")",
+      "Bash(curl -s \"https://aur.archlinux.org/rpc/v5/info?arg[]=hyprscreen\")",
+      "Bash(git add *)",
+      "Read(//home/franlol/Downloads/Hyprscreen/**)",
+      "Skill(claude-in-chrome)",
+      "Read(//home/franlol/.ssh/**)",
+      "Bash(ssh-keygen -y -f ~/.ssh/aur_deploy)",
+      "Bash(gh secret *)",
+      "Bash(command -v wl-copy xclip xsel)",
+      "Bash(echo \"---exit $?---\")",
+      "Bash(wl-copy)",
+      "Bash(curl -fsSL \"https://api.github.com/repos/franlol/hyprscreen/actions/runs/28820374072\")",
+      "Bash(grim -g \"1360,1086 350x90\" /tmp/claude-1000/-home-franlol-Documents-hyprscreen/ab298e9f-bb99-45af-8208-d5b44622e191/scratchpad/toast.png)",
+      "Bash(pkill -x hyprscreen)",
+      "Bash(git commit -q -m 'feat\\(capture\\): delay countdown overlay + configurable delay/pointer defaults *)"
+    ]
+  }
+}

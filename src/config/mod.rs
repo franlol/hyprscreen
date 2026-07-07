@@ -27,6 +27,8 @@ pub struct AppConfig {
     pub dock_style: DockStyle,
     pub autosave: bool,
     pub thumbnail_timeout_seconds: u64,
+    pub capture_delay_seconds: u64,
+    pub show_pointer: bool,
     pub default_mode: DefaultMode,
     pub default_target: DefaultTarget,
     pub show_recording_hud: bool,
@@ -49,6 +51,8 @@ impl Default for AppConfig {
             dock_style: DockStyle::Glass,
             autosave: true,
             thumbnail_timeout_seconds: 8,
+            capture_delay_seconds: 0,
+            show_pointer: true,
             default_mode: DefaultMode::Screenshot,
             default_target: DefaultTarget::Area,
             show_recording_hud: true,
@@ -93,6 +97,9 @@ fn load() -> AppConfig {
         autosave: parse_bool(pairs.get("autosave")).unwrap_or(defaults.autosave),
         thumbnail_timeout_seconds: parse_u64(pairs.get("thumbnail_timeout_seconds"))
             .unwrap_or(defaults.thumbnail_timeout_seconds),
+        capture_delay_seconds: parse_u64(pairs.get("capture_delay_seconds"))
+            .unwrap_or(defaults.capture_delay_seconds),
+        show_pointer: parse_bool(pairs.get("show_pointer")).unwrap_or(defaults.show_pointer),
         default_mode: parse_default_mode(pairs.get("default_mode"))
             .unwrap_or(defaults.default_mode),
         default_target: parse_default_target(pairs.get("default_target"))

@@ -11,6 +11,8 @@
 - `dock_style`
 - `autosave`
 - `thumbnail_timeout_seconds`
+- `capture_delay_seconds`
+- `show_pointer`
 - `default_mode`
 - `default_target`
 - `show_recording_hud`
@@ -30,6 +32,8 @@
 - `dock_style` chooses between `glass` (translucent + Hyprland blur, default) and `solid` (opaque `#14151B`) surfaces (ADR-0011).
 - `autosave` (default `true`) saves captures immediately; `false` keeps them pinned in the thumbnail card until Save (ADR-0013).
 - `thumbnail_timeout_seconds` (default `8`, `0` = never) auto-dismisses the auto-saved thumbnail card.
+- `capture_delay_seconds` (default `0`) seeds the dock's delay chip.
+- `show_pointer` (default `true`) seeds the pointer toggle (`grim -c`; screenshots only).
 - `default_mode` and `default_target` define the initial UI selection.
 - `show_recording_hud` defines the default state of the recording HUD switch.
 - The recording indicator cadence is controlled by `recording_indicator_enabled`, `recording_indicator_interval_seconds`, and `recording_indicator_duration_ms`.
@@ -46,6 +50,8 @@
 dock_style=glass
 autosave=true
 thumbnail_timeout_seconds=8
+capture_delay_seconds=0
+show_pointer=true
 default_mode=screenshot
 default_target=area
 

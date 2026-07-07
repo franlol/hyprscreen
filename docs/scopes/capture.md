@@ -25,6 +25,8 @@
 - Screenshot mode uses the teal (`#5EE6D0`) selection style for `Area`, `Window`, and `Monitor` (ADR-0011).
 - Recording mode uses the coral (`#FF5D5D`) selection style for `Area` and `Monitor` (ADR-0011).
 - `Window` and `Monitor` targets use `slurp -r` with predefined rectangles inside a dimmed full-screen overlay.
+- With a capture delay set, the countdown overlay runs *after* selection and the capture fires ~120ms after the overlay closes (ADR-0015).
+- `show_pointer` appends `-c` to grim; recordings always include the cursor (wf-recorder limitation).
 - `Area` and `Window` use `slurp -w 3`; `Monitor` uses `slurp -w 6` so the full-screen rectangle outlines read at scale.
 - `Area` selection uses `slurp -d` to display live drag dimensions.
 
