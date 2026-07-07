@@ -100,8 +100,47 @@ fn dispatch_setfloating(selector: &str) {
 }
 
 thread_local! {
-    static PREPOSITIONED: std::cell::RefCell<std::collections::HashMap<String, (i32, i32)>> =
+    static PREPOSITIONED: std::cell::RefCell<std::collections::HashMap<String, (i32, i32, u64)>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Bumped whenever the compositor drops our dynamic rules (config reload or
+/// compositor restart), so cached registrations are known to be stale.
+static RULE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static RELOAD_LISTENER: std::sync::Once = std::sync::Once::new();
+
+/// Watches Hyprland's event socket: a `configreloaded` event wipes all
+/// dynamically-added windowrules, so the preposition cache must be
+/// invalidated or windows silently fall back to mapping at screen center.
+fn spawn_reload_listener() {
+    RELOAD_LISTENER.call_once(|| {
+        std::thread::spawn(|| {
+            use std::io::BufRead;
+            loop {
+                let (Some(runtime), Some(sig)) = (
+                    std::env::var_os("XDG_RUNTIME_DIR"),
+                    std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE"),
+                ) else {
+                    return;
+                };
+                let path = std::path::PathBuf::from(runtime)
+                    .join("hypr")
+                    .join(sig)
+                    .join(".socket2.sock");
+                if let Ok(stream) = std::os::unix::net::UnixStream::connect(&path) {
+                    for line in std::io::BufReader::new(stream).lines() {
+                        let Ok(line) = line else { break };
+                        if line.starts_with("configreloaded") {
+                            RULE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                }
+                // Connection lost: a compositor restart also dropped the rules.
+                RULE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        });
+    });
 }
 
 /// Registers a windowrule so the next window titled `window_match` maps
@@ -109,12 +148,15 @@ thread_local! {
 /// center until the post-map `place_window_exact` move lands. Dynamic rules
 /// cannot be unset (only a config reload clears them) but later rules win,
 /// so the last coordinates are cached and a rule is only added when they
-/// change — the freshest rule supersedes stale ones.
+/// change or a reload dropped them — the freshest rule supersedes stale ones.
 pub fn preposition_window(window_match: &str, x: i32, y: i32) {
     if !is_hyprland_session() {
         return;
     }
-    let cached = PREPOSITIONED.with_borrow(|map| map.get(window_match) == Some(&(x, y)));
+    spawn_reload_listener();
+    let generation = RULE_GENERATION.load(std::sync::atomic::Ordering::Relaxed);
+    let cached =
+        PREPOSITIONED.with_borrow(|map| map.get(window_match) == Some(&(x, y, generation)));
     if cached {
         return;
     }
@@ -125,7 +167,23 @@ pub fn preposition_window(window_match: &str, x: i32, y: i32) {
     let ok = matches!(&output, Ok(o) if o.status.success() && o.stdout.starts_with(b"ok"));
     if ok {
         PREPOSITIONED
-            .with_borrow_mut(|map| map.insert(window_match.to_string(), (x, y)));
+            .with_borrow_mut(|map| map.insert(window_match.to_string(), (x, y, generation)));
+    }
+}
+
+/// Re-registers the cached rule for `window_match` if a config reload has
+/// dropped it since. Call before re-presenting a window whose rule was set
+/// earlier, so the re-map lands at its position instead of screen center.
+pub fn refresh_preposition(window_match: &str) {
+    if !is_hyprland_session() {
+        return;
+    }
+    spawn_reload_listener();
+    let generation = RULE_GENERATION.load(std::sync::atomic::Ordering::Relaxed);
+    let stale = PREPOSITIONED
+        .with_borrow(|map| map.get(window_match).filter(|(_, _, g)| *g != generation).map(|(x, y, _)| (*x, *y)));
+    if let Some((x, y)) = stale {
+        preposition_window(window_match, x, y);
     }
 }
 

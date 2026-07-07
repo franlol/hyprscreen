@@ -95,6 +95,17 @@ pub fn build(
     );
     window.set_child(Some(&dock));
 
+    // Pre-position from the measured size so the dock maps at its final
+    // spot instead of flashing at screen center; position_dock then
+    // corrects with the realized size and keeps the rule fresh for
+    // post-capture re-maps.
+    let (_, nat_w, _, _) = dock.measure(gtk::Orientation::Horizontal, -1);
+    let (_, nat_h, _, _) = dock.measure(gtk::Orientation::Vertical, nat_w);
+    if let Some(mon) = crate::hyprland::focused_monitor() {
+        let (x, y) = dock_position(&mon, nat_w, nat_h);
+        crate::hyprland::preposition_window("Hyprscreen", x, y);
+    }
+
     window
 }
 
@@ -832,11 +843,25 @@ fn position_dock(window: &gtk::ApplicationWindow) {
             return;
         }
         if let Some(mon) = crate::hyprland::focused_monitor() {
-            let x = mon.x + ((mon.width - w) / 2).max(0);
-            let y = mon.y + (mon.height - h - 34).max(0);
+            let (x, y) = dock_position(&mon, w, h);
             crate::hyprland::place_window_exact("Hyprscreen", x, y);
+            crate::hyprland::preposition_window("Hyprscreen", x, y);
         }
     });
+}
+
+fn dock_position(mon: &crate::hyprland::Monitor, w: i32, h: i32) -> (i32, i32) {
+    let x = mon.x + ((mon.width - w) / 2).max(0);
+    let y = mon.y + (mon.height - h - 34).max(0);
+    (x, y)
+}
+
+/// Re-presents the dock after it was hidden for a capture. Re-mapping is a
+/// fresh map to the compositor, so the preposition rule must still exist —
+/// refresh it first in case a config reload dropped it.
+fn present_dock(window: &gtk::ApplicationWindow) {
+    crate::hyprland::refresh_preposition("Hyprscreen");
+    window.present();
 }
 
 fn apply_startup_target(
@@ -960,7 +985,7 @@ fn run_capture_action(
                                 Err(_) => return glib::ControlFlow::Break,
                             };
 
-                            window2.present();
+                            present_dock(&window2);
                             fire_button2.set_sensitive(true);
                             match result.and_then(thumbnail::for_screenshot) {
                                 Ok(info) => thumbnail::show(info),
@@ -982,7 +1007,7 @@ fn run_capture_action(
             let cancel_window = window.clone();
             let cancel_fire = fire_button.clone();
             countdown::run(delay_secs, countdown_region, false, proceed, move || {
-                cancel_window.present();
+                present_dock(&cancel_window);
                 cancel_fire.set_sensitive(true);
             });
 
@@ -1135,7 +1160,7 @@ fn start_recording_action(
             let cancel_window = window.clone();
             let cancel_fire = fire_button.clone();
             countdown::run(delay_secs, countdown_region, true, proceed, move || {
-                cancel_window.present();
+                present_dock(&cancel_window);
                 cancel_fire.set_sensitive(true);
             });
 
@@ -1206,7 +1231,7 @@ fn start_recording_poll(
                             drop(borrowed);
                             close_recording_windows(&finished);
                             crate::capture::record::clear_state_file();
-                            window.present();
+                            present_dock(&window);
                             enable_setup_cta(&setup_cta);
                             toast::error("Restart failed", &error.to_string());
                             glib::ControlFlow::Break
@@ -1222,7 +1247,7 @@ fn start_recording_poll(
                     if !has_output && !status.success() {
                         close_recording_windows(&finished);
                         crate::capture::record::clear_state_file();
-                        window.present();
+                        present_dock(&window);
                         enable_setup_cta(&setup_cta);
                         toast::error(
                             "Recording failed",
@@ -1239,7 +1264,7 @@ fn start_recording_poll(
             Err(error) => {
                 drop(borrowed);
                 crate::capture::record::clear_state_file();
-                window.present();
+                present_dock(&window);
                 enable_setup_cta(&setup_cta);
                 toast::error("Recording poll failed", &error.to_string());
                 glib::ControlFlow::Break
@@ -1268,7 +1293,7 @@ fn finish_recording(
 ) {
     close_recording_windows(&finished);
     crate::capture::record::clear_state_file();
-    window.present();
+    present_dock(&window);
     enable_setup_cta(setup_cta);
 
     let format = finished.spec.format;
@@ -1306,7 +1331,7 @@ fn report_capture_error(
     window: &gtk::ApplicationWindow,
     fire_button: &gtk::Button,
 ) {
-    window.present();
+    present_dock(window);
     fire_button.set_sensitive(true);
     let retry_button = fire_button.clone();
     toast::error_with(prefix, &error.to_string(), "Retry", move || {
