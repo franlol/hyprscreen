@@ -1086,4 +1086,18 @@ window.hs-cheat-window {
     font-weight: 500;
     letter-spacing: 0.02em;
 }
+
+
+/* ═══════════════ Draw-on-screen overlay (ADR-0020) ═══════════════ */
+
+window.hs-draw-window,
+window.hs-draw-window > * {
+    background: transparent;
+}
+
+.hs-hb.on {
+    color: #EDEEF2;
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset;
+}
 "#;

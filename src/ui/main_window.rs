@@ -1250,6 +1250,7 @@ fn close_recording_windows(finished: &ActiveRecording) {
     if let Some(indicator) = &finished.indicator_window {
         indicator.close();
     }
+    super::draw_overlay::stop();
 }
 
 /// Joins the recorded segments, then hands the result to the thumbnail card.
@@ -1496,8 +1497,15 @@ fn create_recording_hud(
         let cam_button = hud_button("cam", "Webcam — coming soon");
         cam_button.set_sensitive(false);
         content.append(&cam_button);
-        let draw_button = hud_button("draw", "Draw on screen — coming soon");
-        draw_button.set_sensitive(false);
+        let draw_button = hud_button("draw", "Draw on screen · Esc exits");
+        draw_button.connect_clicked(move |button| {
+            super::draw_overlay::toggle(monitor);
+            if super::draw_overlay::is_active() {
+                button.add_css_class("on");
+            } else {
+                button.remove_css_class("on");
+            }
+        });
         content.append(&draw_button);
 
         content.append(&make_dock_divider());

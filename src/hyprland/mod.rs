@@ -115,6 +115,18 @@ pub fn place_window_exact(window_match: &str, x: i32, y: i32) {
     }
 }
 
+/// Pins a floating window so it stays above the stack (best effort).
+pub fn pin_window(window_match: &str) {
+    if !is_hyprland_session() {
+        return;
+    }
+    if let Some(selector) = selector_for_title(window_match) {
+        let _ = Command::new("hyprctl")
+            .args(["dispatch", "pin", &selector])
+            .output();
+    }
+}
+
 pub fn make_window_plain(window_match: &str) {
     if !is_hyprland_session() {
         return;
