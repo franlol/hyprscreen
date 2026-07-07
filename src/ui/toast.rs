@@ -126,6 +126,15 @@ fn show(kind: ToastKind, title: &str, subtitle: &str, action: Option<(&str, Box<
     }
 
     window.set_child(Some(&row));
+    // Pre-position from the measured size so the toast maps at its final
+    // spot instead of flashing at screen center; position() then corrects
+    // with the realized size if the measurement was off.
+    let (_, nat_w, _, _) = row.measure(gtk::Orientation::Horizontal, -1);
+    let (_, nat_h, _, _) = row.measure(gtk::Orientation::Vertical, nat_w);
+    if let Some(mon) = crate::hyprland::focused_monitor() {
+        let (x, y) = bottom_center(&mon, nat_w, nat_h);
+        crate::hyprland::preposition_window(TITLE, x, y);
+    }
     window.present();
     crate::hyprland::make_window_glass(TITLE, 12);
     position(&window);
@@ -153,10 +162,15 @@ fn position(window: &gtk::Window) {
             return;
         }
         if let Some(mon) = crate::hyprland::focused_monitor() {
-            let x = mon.x + ((mon.width - w) / 2).max(0);
-            // Sits above the dock (dock height ~76 + 34 margin + 12 gap).
-            let y = mon.y + (mon.height - h - 130).max(0);
+            let (x, y) = bottom_center(&mon, w, h);
             crate::hyprland::place_window_exact(TITLE, x, y);
         }
     });
+}
+
+fn bottom_center(mon: &crate::hyprland::Monitor, w: i32, h: i32) -> (i32, i32) {
+    let x = mon.x + ((mon.width - w) / 2).max(0);
+    // Sits above the dock (dock height ~76 + 34 margin + 12 gap).
+    let y = mon.y + (mon.height - h - 130).max(0);
+    (x, y)
 }

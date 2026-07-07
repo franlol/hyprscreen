@@ -99,6 +99,36 @@ fn dispatch_setfloating(selector: &str) {
         .output();
 }
 
+thread_local! {
+    static PREPOSITIONED: std::cell::RefCell<std::collections::HashMap<String, (i32, i32)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Registers a windowrule so the next window titled `window_match` maps
+/// floating at (x, y) with no open animation, instead of tiling at screen
+/// center until the post-map `place_window_exact` move lands. Dynamic rules
+/// cannot be unset (only a config reload clears them) but later rules win,
+/// so the last coordinates are cached and a rule is only added when they
+/// change — the freshest rule supersedes stale ones.
+pub fn preposition_window(window_match: &str, x: i32, y: i32) {
+    if !is_hyprland_session() {
+        return;
+    }
+    let cached = PREPOSITIONED.with_borrow(|map| map.get(window_match) == Some(&(x, y)));
+    if cached {
+        return;
+    }
+    let rule = format!("match:title ^({window_match})$, float 1, no_anim 1, move {x} {y}");
+    let output = Command::new("hyprctl")
+        .args(["keyword", "windowrule", &rule])
+        .output();
+    let ok = matches!(&output, Ok(o) if o.status.success() && o.stdout.starts_with(b"ok"));
+    if ok {
+        PREPOSITIONED
+            .with_borrow_mut(|map| map.insert(window_match.to_string(), (x, y)));
+    }
+}
+
 pub fn place_window_exact(window_match: &str, x: i32, y: i32) {
     if !is_hyprland_session() {
         return;

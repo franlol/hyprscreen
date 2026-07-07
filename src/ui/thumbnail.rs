@@ -380,6 +380,15 @@ pub fn show(info: ThumbInfo) {
     close_button.connect_clicked(|_| dismiss(true));
 
     window.set_child(Some(&root));
+    // Pre-position from the measured size so the card maps at its final
+    // spot instead of flashing at screen center; position() then corrects
+    // with the realized size if the measurement was off.
+    let (_, nat_w, _, _) = root.measure(gtk::Orientation::Horizontal, -1);
+    let (_, nat_h, _, _) = root.measure(gtk::Orientation::Vertical, nat_w);
+    if let Some(mon) = crate::hyprland::focused_monitor() {
+        let (x, y) = top_right(&mon, nat_w, nat_h);
+        crate::hyprland::preposition_window(TITLE, x, y);
+    }
     window.present();
     crate::hyprland::make_window_glass(TITLE, 16);
     position(&window);
@@ -539,9 +548,14 @@ fn position(window: &gtk::Window) {
             return;
         }
         if let Some(mon) = crate::hyprland::focused_monitor() {
-            let x = mon.x + (mon.width - w - 22).max(0);
-            let y = mon.y + 54;
+            let (x, y) = top_right(&mon, w, h);
             crate::hyprland::place_window_exact(TITLE, x, y);
         }
     });
+}
+
+fn top_right(mon: &crate::hyprland::Monitor, w: i32, _h: i32) -> (i32, i32) {
+    let x = mon.x + (mon.width - w - 22).max(0);
+    let y = mon.y + 54;
+    (x, y)
 }
