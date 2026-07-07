@@ -3,7 +3,7 @@
 ## Current Commands
 
 - `hyprscreen`
-- `hyprscreen stop`
+- `hyprscreen stop` (also finalizes a paused recording via the stop-request sentinel, ADR-0016)
 - `hyprscreen screenshot area|window|monitor`
 - `hyprscreen record area|window|monitor`
 - `hyprscreen --version` / `-V`

@@ -1041,4 +1041,49 @@ entry.hs-annot-entry {
     min-height: 0;
     caret-color: #5EE6D0;
 }
+
+
+/* ═══════════════ Shortcuts cheatsheet ═══════════════ */
+
+window.hs-cheat-window {
+    background: rgba(30, 32, 40, 0.92);
+}
+
+.hs-cheat {
+    padding: 18px 20px;
+}
+
+.hs-cheat-title {
+    color: #EDEEF2;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+.hs-cheat-label {
+    color: #9A9CA6;
+    font-size: 11.5px;
+    font-weight: 500;
+}
+
+.hs-kbd {
+    color: #EDEEF2;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-bottom: 2px solid rgba(255, 255, 255, 0.10);
+    border-radius: 5px;
+    padding: 4px 6px;
+    min-width: 18px;
+    font-family: "JetBrains Mono", "Fira Mono", monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+}
+
+.hs-cheat-hint {
+    color: #62646E;
+    font-family: "JetBrains Mono", "Fira Mono", monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+}
 "#;

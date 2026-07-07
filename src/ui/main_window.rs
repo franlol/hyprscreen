@@ -680,6 +680,9 @@ fn build_dock(
                         pointer_button.set_active(!pointer_button.is_active());
                     }
                 }
+                gtk::gdk::Key::question | gtk::gdk::Key::slash => {
+                    super::cheatsheet::toggle()
+                }
                 gtk::gdk::Key::Escape => win.close(),
                 _ => return glib::Propagation::Proceed,
             }
