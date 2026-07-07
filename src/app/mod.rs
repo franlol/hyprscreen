@@ -176,6 +176,7 @@ button {
     border-radius: 13px;
     padding: 13px 16px;
     min-height: 0;
+    min-width: 118px;
     transition: all 120ms;
 }
 
