@@ -25,6 +25,8 @@ pub enum DockStyle {
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub dock_style: DockStyle,
+    pub autosave: bool,
+    pub thumbnail_timeout_seconds: u64,
     pub default_mode: DefaultMode,
     pub default_target: DefaultTarget,
     pub show_recording_hud: bool,
@@ -45,6 +47,8 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             dock_style: DockStyle::Glass,
+            autosave: true,
+            thumbnail_timeout_seconds: 8,
             default_mode: DefaultMode::Screenshot,
             default_target: DefaultTarget::Area,
             show_recording_hud: true,
@@ -86,6 +90,9 @@ fn load() -> AppConfig {
 
     AppConfig {
         dock_style: parse_dock_style(pairs.get("dock_style")).unwrap_or(defaults.dock_style),
+        autosave: parse_bool(pairs.get("autosave")).unwrap_or(defaults.autosave),
+        thumbnail_timeout_seconds: parse_u64(pairs.get("thumbnail_timeout_seconds"))
+            .unwrap_or(defaults.thumbnail_timeout_seconds),
         default_mode: parse_default_mode(pairs.get("default_mode"))
             .unwrap_or(defaults.default_mode),
         default_target: parse_default_target(pairs.get("default_target"))
@@ -194,6 +201,10 @@ fn parse_bool(value: Option<&String>) -> Option<bool> {
         "false" => Some(false),
         _ => None,
     }
+}
+
+fn parse_u64(value: Option<&String>) -> Option<u64> {
+    value?.trim().parse::<u64>().ok()
 }
 
 fn parse_positive_u64(value: Option<&String>) -> Option<u64> {

@@ -1,18 +1,20 @@
 use std::cell::{Cell, RefCell};
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::path::PathBuf;
+use std::process::Child;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 
-const WINDOW_WIDTH: i32 = 400;
+use super::icons::{icon_image, icon_image_colored, icon_texture};
+use super::thumbnail;
+use super::toast;
+
 const INITIAL_HIDE_DELAY_MS: u64 = 60;
 const MONITOR_OVERLAY_EXTRA_DELAY_MS: u64 = 220;
 const SELECTION_POLL_INTERVAL_MS: u64 = 50;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
     Screenshot,
@@ -26,40 +28,6 @@ enum Target {
     Monitor,
 }
 
-impl Target {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Area => "area",
-            Self::Window => "window",
-            Self::Monitor => "monitor",
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-struct PreviewState {
-    temp_path: Option<PathBuf>,
-    current_path: Option<PathBuf>,
-    thumbnail_path: Option<PathBuf>,
-    kind: PreviewKind,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum PreviewKind {
-    #[default]
-    Screenshot,
-    Recording,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct LastAction {
-    mode: Mode,
-    target: Target,
-    show_recording_hud: bool,
-    delay_secs: u64,
-    pointer: bool,
-}
-
 struct ActiveRecording {
     child: Child,
     temp_path: PathBuf,
@@ -67,15 +35,6 @@ struct ActiveRecording {
     indicator_window: Option<gtk::Window>,
     started_at: Instant,
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StatusKind {
-    Neutral,
-    Error,
-    Success,
-    Live,
-}
-
 
 pub fn build(
     app: &gtk::Application,
@@ -95,129 +54,27 @@ pub fn build(
         position_dock(w);
     });
 
-    let stack = gtk::Stack::builder()
-        .transition_type(gtk::StackTransitionType::Crossfade)
-        .hhomogeneous(false)
-        .vhomogeneous(false)
-        .build();
-
-    let preview_state = Rc::new(RefCell::new(PreviewState::default()));
-    let last_action = Rc::new(RefCell::new(None::<LastAction>));
     let recording_state = Rc::new(RefCell::new(None::<ActiveRecording>));
     let setup_cta = Rc::new(RefCell::new(None::<gtk::Button>));
     let show_recording_hud = Rc::new(RefCell::new(crate::config::get().show_recording_hud));
 
-    let preview_picture = gtk::Picture::builder()
-        .can_shrink(true)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-
-    let preview_meta_label = gtk::Label::builder()
-        .halign(gtk::Align::Center)
-        .hexpand(true)
-        .wrap(true)
-        .css_classes(["hs-meta"])
-        .build();
-
-    let preview_status_label = gtk::Label::builder()
-        .halign(gtk::Align::Center)
-        .hexpand(true)
-        .wrap(true)
-        .css_classes(["hs-status"])
-        .build();
-
-    let setup_status_label = gtk::Label::builder()
-        .label("")
-        .halign(gtk::Align::Center)
-        .css_classes(["hs-status"])
-        .build();
-
-    let save_button = gtk::Button::new();
-    save_button.add_css_class("hs-abtn");
-    save_button.add_css_class("is-primary");
-    save_button.add_css_class("mode-shot");
-    save_button.set_sensitive(false);
-    set_action_button_content(&save_button, "save", "Save");
-
-    let copy_button = gtk::Button::new();
-    copy_button.add_css_class("hs-abtn");
-    copy_button.set_sensitive(false);
-    set_action_button_content(&copy_button, "copy", "Copy");
-
-    let reveal_button = gtk::Button::new();
-    reveal_button.add_css_class("hs-abtn");
-    reveal_button.set_sensitive(false);
-    set_action_button_content(&reveal_button, "reveal", "Reveal");
-
-    // Recording-only: converts the previewed recording to a GIF. Hidden for screenshots.
-    let gif_button = gtk::Button::new();
-    gif_button.add_css_class("hs-abtn");
-    gif_button.set_sensitive(false);
-    gif_button.set_visible(false);
-    set_action_button_content(&gif_button, "gif", "GIF");
-
-    let setup_page = build_setup_page(
+    let dock = build_dock(
         &window,
-        &stack,
-        &preview_state,
-        &last_action,
         &recording_state,
         &setup_cta,
         &show_recording_hud,
-        &preview_picture,
-        &preview_meta_label,
-        &preview_status_label,
-        &setup_status_label,
-        &save_button,
-        &copy_button,
-        &reveal_button,
-        &gif_button,
         startup,
     );
-    stack.add_named(&setup_page, Some("setup"));
-
-    let preview_page = build_preview_page(
-        &window,
-        &stack,
-        &preview_state,
-        &last_action,
-        &recording_state,
-        &setup_cta,
-        &preview_picture,
-        &preview_meta_label,
-        &preview_status_label,
-        &setup_status_label,
-        &save_button,
-        &copy_button,
-        &reveal_button,
-        &gif_button,
-    );
-    stack.add_named(&preview_page, Some("preview"));
-    stack.set_visible_child_name("setup");
-
-    window.set_child(Some(&stack));
+    window.set_child(Some(&dock));
 
     window
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_setup_page(
+fn build_dock(
     window: &gtk::ApplicationWindow,
-    stack: &gtk::Stack,
-    preview_state: &Rc<RefCell<PreviewState>>,
-    last_action: &Rc<RefCell<Option<LastAction>>>,
     recording_state: &Rc<RefCell<Option<ActiveRecording>>>,
     setup_cta: &Rc<RefCell<Option<gtk::Button>>>,
     show_recording_hud: &Rc<RefCell<bool>>,
-    preview_picture: &gtk::Picture,
-    preview_meta_label: &gtk::Label,
-    preview_status_label: &gtk::Label,
-    status_label: &gtk::Label,
-    save_button: &gtk::Button,
-    copy_button: &gtk::Button,
-    reveal_button: &gtk::Button,
-    gif_button: &gtk::Button,
     startup: Option<crate::cli::StartupAction>,
 ) -> gtk::Widget {
     let config = crate::config::get();
@@ -466,18 +323,10 @@ fn build_setup_page(
     hud_row.set_visible(default_is_record);
 
     hud_toggle.connect_active_notify(glib::clone!(
-        #[weak]
-        status_label,
         #[strong]
         show_recording_hud,
         move |switch| {
-            let enabled = switch.is_active();
-            *show_recording_hud.borrow_mut() = enabled;
-            if enabled {
-                set_status_neutral(&status_label, "");
-            } else {
-                set_status_stop_hint(&status_label);
-            }
+            *show_recording_hud.borrow_mut() = switch.is_active();
         }
     ));
 
@@ -525,8 +374,6 @@ fn build_setup_page(
         #[weak]
         cta_button,
         #[weak]
-        status_label,
-        #[weak]
         hud_row,
         #[weak]
         pointer_button,
@@ -558,7 +405,6 @@ fn build_setup_page(
                 } else {
                     "Pointer: off"
                 }));
-                set_status_neutral(&status_label, "");
             }
         }
     ));
@@ -572,8 +418,6 @@ fn build_setup_page(
         record_button,
         #[weak]
         cta_button,
-        #[weak]
-        status_label,
         #[weak]
         hud_row,
         #[weak]
@@ -601,9 +445,7 @@ fn build_setup_page(
                 rec_seg_icon.set_paintable(Some(&icon_texture("rec", 15, "#FF5D5D")));
                 hud_row.set_visible(true);
                 pointer_button.set_sensitive(false);
-                pointer_button
-                    .set_tooltip_text(Some("wf-recorder always records the pointer"));
-                set_status_neutral(&status_label, "");
+                pointer_button.set_tooltip_text(Some("wf-recorder always records the pointer"));
             }
         }
     ));
@@ -635,31 +477,9 @@ fn build_setup_page(
         #[weak]
         pointer_button,
         #[weak]
-        status_label,
-        #[weak]
         cta_button,
         #[weak]
         window,
-        #[weak]
-        stack,
-        #[weak]
-        preview_picture,
-        #[weak]
-        preview_meta_label,
-        #[weak]
-        preview_status_label,
-        #[weak]
-        save_button,
-        #[weak]
-        copy_button,
-        #[weak]
-        reveal_button,
-        #[weak]
-        gif_button,
-        #[strong]
-        preview_state,
-        #[strong]
-        last_action,
         #[strong]
         recording_state,
         #[strong]
@@ -671,79 +491,36 @@ fn build_setup_page(
         move |_| {
             let target = active_target(&area_button, &window_button);
             let delay = delay_secs.get();
-            let pointer = pointer_button.is_active();
 
             if screenshot_button.is_active() {
-                set_status_live(&status_label, &format!("selecting {}...", target.name()));
-                *last_action.borrow_mut() = Some(LastAction {
-                    mode: Mode::Screenshot,
-                    target,
-                    show_recording_hud: false,
-                    delay_secs: delay,
-                    pointer,
-                });
                 run_capture_action(
                     &window,
-                    &stack,
-                    &preview_state,
-                    &preview_picture,
-                    &preview_meta_label,
-                    &preview_status_label,
-                    &save_button,
-                    &copy_button,
-                    &reveal_button,
-                    &gif_button,
                     target,
                     delay,
-                    pointer,
-                    Some((&cta_button, &status_label)),
+                    pointer_button.is_active(),
+                    &cta_button,
                 );
                 return;
             }
 
             let show_hud = *show_recording_hud.borrow();
-            if show_hud {
-                set_status_live(&status_label, &format!("recording {}...", target.name()));
-            } else {
-                set_status_stop_hint(&status_label);
-            }
-            *last_action.borrow_mut() = Some(LastAction {
-                mode: Mode::Record,
-                target,
-                show_recording_hud: show_hud,
-                delay_secs: delay,
-                pointer,
-            });
-
             start_recording_action(
                 &window,
-                &stack,
-                &preview_state,
                 &recording_state,
                 &setup_cta,
-                &preview_picture,
-                &preview_meta_label,
-                &preview_status_label,
-                &status_label,
-                &save_button,
-                &copy_button,
-                &reveal_button,
-                &gif_button,
                 target,
                 show_hud,
                 delay,
-                Some((&cta_button, &status_label)),
+                &cta_button,
             );
         }
     ));
 
-    // ── Keyboard shortcuts (dock only) ─────────────────────────
+    // ── Keyboard shortcuts ─────────────────────────────────────
     let key_controller = gtk::EventControllerKey::new();
     key_controller.connect_key_pressed(glib::clone!(
         #[weak(rename_to = win)]
         window,
-        #[weak]
-        stack,
         #[weak]
         cta_button,
         #[weak]
@@ -763,9 +540,6 @@ fn build_setup_page(
         #[upgrade_or]
         glib::Propagation::Proceed,
         move |_, key, _, _| {
-            if stack.visible_child_name().as_deref() != Some("setup") {
-                return glib::Propagation::Proceed;
-            }
             match key {
                 gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => {
                     if cta_button.is_sensitive() {
@@ -801,18 +575,6 @@ fn build_setup_page(
     dock.append(&more);
     dock.append(&cta_button);
 
-    let root = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(2)
-        .build();
-    root.append(&dock);
-    // Transitional status line until toast windows land (plan phase 3).
-    status_label.set_halign(gtk::Align::Start);
-    status_label.set_margin_start(14);
-    status_label.set_margin_bottom(8);
-    status_label.set_visible(false);
-    root.append(status_label);
-
     if let Some(action) = startup {
         let screenshot_btn = screenshot_button.clone();
         let record_btn = record_button.clone();
@@ -839,10 +601,14 @@ fn build_setup_page(
         });
     }
 
-    root.upcast()
+    dock.upcast()
 }
 
-fn make_seg_button(label_text: &str, icon_key: &str, class: &str) -> (gtk::ToggleButton, gtk::Image) {
+fn make_seg_button(
+    label_text: &str,
+    icon_key: &str,
+    class: &str,
+) -> (gtk::ToggleButton, gtk::Image) {
     let btn = gtk::ToggleButton::new();
     btn.add_css_class("hs-dseg-btn");
     btn.add_css_class(class);
@@ -963,497 +729,29 @@ fn apply_startup_target(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_preview_page(
-    window: &gtk::ApplicationWindow,
-    stack: &gtk::Stack,
-    preview_state: &Rc<RefCell<PreviewState>>,
-    last_action: &Rc<RefCell<Option<LastAction>>>,
-    recording_state: &Rc<RefCell<Option<ActiveRecording>>>,
-    setup_cta: &Rc<RefCell<Option<gtk::Button>>>,
-    preview_picture: &gtk::Picture,
-    preview_meta_label: &gtk::Label,
-    preview_status_label: &gtk::Label,
-    setup_status_label: &gtk::Label,
-    save_button: &gtk::Button,
-    copy_button: &gtk::Button,
-    reveal_button: &gtk::Button,
-    gif_button: &gtk::Button,
-) -> gtk::Widget {
-    let body = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(14)
-        .width_request(WINDOW_WIDTH - 36)
-        .css_classes(["hs-body"])
-        .build();
-
-    // ── Preview frame ──────────────────────────────────────────
-    let preview_aspect = gtk::AspectFrame::builder()
-        .xalign(0.5)
-        .yalign(0.5)
-        .ratio(16.0 / 10.0)
-        .obey_child(false)
-        .hexpand(true)
-        .css_classes(["hs-preview-frame"])
-        .build();
-    preview_aspect.set_child(Some(preview_picture));
-
-    preview_meta_label.set_halign(gtk::Align::Start);
-    preview_meta_label.set_hexpand(true);
-    preview_status_label.set_halign(gtk::Align::Center);
-    preview_status_label.set_hexpand(true);
-
-    // ── Action row — 5 buttons ─────────────────────────────────
-    let back_button = gtk::Button::new();
-    back_button.add_css_class("hs-abtn");
-    set_action_button_content(&back_button, "back", "Back");
-
-    let new_button = gtk::Button::new();
-    new_button.add_css_class("hs-abtn");
-    set_action_button_content(&new_button, "refresh", "New");
-
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
-        .homogeneous(true)
-        .hexpand(true)
-        .build();
-
-    actions.append(&back_button);
-    actions.append(&new_button);
-    actions.append(save_button);
-    actions.append(gif_button);
-    actions.append(copy_button);
-    actions.append(reveal_button);
-
-    // ── Back ───────────────────────────────────────────────────
-    back_button.connect_clicked(glib::clone!(
-        #[weak]
-        stack,
-        #[weak]
-        window,
-        #[weak]
-        preview_picture,
-        #[weak]
-        preview_meta_label,
-        #[weak]
-        preview_status_label,
-        #[weak]
-        setup_status_label,
-        #[weak]
-        save_button,
-        #[weak]
-        copy_button,
-        #[weak]
-        reveal_button,
-        #[weak]
-        gif_button,
-        #[strong]
-        preview_state,
-        #[strong]
-        setup_cta,
-        move |_| {
-            clear_preview(
-                &preview_state,
-                &preview_picture,
-                &preview_meta_label,
-                &preview_status_label,
-                &save_button,
-                &copy_button,
-                &reveal_button,
-                &gif_button,
-            );
-            enable_setup_cta(&setup_cta);
-            set_status_neutral(&setup_status_label, "");
-            stack.set_visible_child_name("setup");
-            window.present();
-        }
-    ));
-
-    // ── New ────────────────────────────────────────────────────
-    new_button.connect_clicked(glib::clone!(
-        #[weak]
-        window,
-        #[weak]
-        stack,
-        #[weak]
-        preview_picture,
-        #[weak]
-        preview_meta_label,
-        #[weak]
-        preview_status_label,
-        #[weak]
-        setup_status_label,
-        #[weak]
-        save_button,
-        #[weak]
-        copy_button,
-        #[weak]
-        reveal_button,
-        #[weak]
-        gif_button,
-        #[strong]
-        preview_state,
-        #[strong]
-        last_action,
-        #[strong]
-        recording_state,
-        #[strong]
-        setup_cta,
-        move |_| {
-            let Some(action) = *last_action.borrow() else {
-                stack.set_visible_child_name("setup");
-                return;
-            };
-
-            match action.mode {
-                Mode::Screenshot => run_capture_action(
-                    &window,
-                    &stack,
-                    &preview_state,
-                    &preview_picture,
-                    &preview_meta_label,
-                    &preview_status_label,
-                    &save_button,
-                    &copy_button,
-                    &reveal_button,
-                    &gif_button,
-                    action.target,
-                    action.delay_secs,
-                    action.pointer,
-                    None,
-                ),
-                Mode::Record => start_recording_action(
-                    &window,
-                    &stack,
-                    &preview_state,
-                    &recording_state,
-                    &setup_cta,
-                    &preview_picture,
-                    &preview_meta_label,
-                    &preview_status_label,
-                    &setup_status_label,
-                    &save_button,
-                    &copy_button,
-                    &reveal_button,
-                    &gif_button,
-                    action.target,
-                    action.show_recording_hud,
-                    action.delay_secs,
-                    None,
-                ),
-            }
-        }
-    ));
-
-    // ── Copy / Open ────────────────────────────────────────────
-    copy_button.connect_clicked(glib::clone!(
-        #[weak]
-        preview_status_label,
-        #[strong]
-        preview_state,
-        move |_| match preview_state.borrow().kind {
-            PreviewKind::Screenshot => {
-                match copy_preview_to_clipboard(&preview_state.borrow().current_path) {
-                    Ok(()) => set_status_ok(&preview_status_label, "copied to clipboard"),
-                    Err(error) => {
-                        set_status_err(&preview_status_label, &format!("Copy failed: {error}"))
-                    }
-                }
-            }
-            PreviewKind::Recording => {
-                match open_preview_file(&preview_state.borrow()) {
-                    Ok(method) => set_status_ok(&preview_status_label, &method.feedback_message()),
-                    Err(error) => {
-                        set_status_err(&preview_status_label, &format!("Open failed: {error}"))
-                    }
-                }
-            }
-        }
-    ));
-
-    // ── Reveal ─────────────────────────────────────────────────
-    reveal_button.connect_clicked(glib::clone!(
-        #[weak]
-        preview_status_label,
-        #[strong]
-        preview_state,
-        move |_| match reveal_preview_file(&preview_state.borrow()) {
-            Ok(method) => set_status_ok(&preview_status_label, &method.feedback_message()),
-            Err(error) => set_status_err(&preview_status_label, &format!("Reveal failed: {error}")),
-        }
-    ));
-
-    // ── GIF (recordings only) ──────────────────────────────────
-    // Convert the recording to a GIF and make the GIF the active preview, so the standard
-    // Save / Open / Reveal lifecycle then applies to it exactly like a recording.
-    gif_button.connect_clicked(glib::clone!(
-        #[weak]
-        preview_picture,
-        #[weak]
-        preview_meta_label,
-        #[weak]
-        preview_status_label,
-        #[weak]
-        save_button,
-        #[weak]
-        copy_button,
-        #[weak]
-        reveal_button,
-        #[weak]
-        gif_button,
-        #[strong]
-        preview_state,
-        move |_| {
-            let source = {
-                let preview = preview_state.borrow();
-                if preview.kind != PreviewKind::Recording {
-                    return;
-                }
-                preview.current_path.clone()
-            };
-            let Some(source) = source else {
-                set_status_err(
-                    &preview_status_label,
-                    "GIF failed: there is no recording to convert",
-                );
-                return;
-            };
-
-            set_status_live(&preview_status_label, "Converting to GIF…");
-            gif_button.set_sensitive(false);
-
-            // Conversion is CPU-bound; run it off the GTK main loop and poll for the result.
-            let (tx, rx) = std::sync::mpsc::channel::<anyhow::Result<PathBuf>>();
-            std::thread::spawn(move || {
-                let _ = tx.send(crate::capture::record::convert_recording_to_gif(&source));
-            });
-
-            let preview_state = preview_state.clone();
-            let preview_picture = preview_picture.clone();
-            let preview_meta_label = preview_meta_label.clone();
-            let preview_status_label = preview_status_label.clone();
-            let save_button = save_button.clone();
-            let copy_button = copy_button.clone();
-            let reveal_button = reveal_button.clone();
-            let gif_button = gif_button.clone();
-            glib::timeout_add_local(
-                Duration::from_millis(SELECTION_POLL_INTERVAL_MS),
-                move || {
-                    let result = match rx.try_recv() {
-                        Ok(r) => r,
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {
-                            return glib::ControlFlow::Continue
-                        }
-                        Err(_) => return glib::ControlFlow::Break,
-                    };
-                    match result {
-                        Ok(gif_path) => {
-                            load_preview_gif(
-                                &gif_path,
-                                &preview_state,
-                                &preview_picture,
-                                &preview_meta_label,
-                                &copy_button,
-                                &reveal_button,
-                            );
-                            save_button.set_sensitive(true);
-                            // The artifact is already a GIF; nothing left to convert.
-                            gif_button.set_sensitive(false);
-                            set_status_ok(&preview_status_label, "GIF ready — Save to keep it");
-                        }
-                        Err(error) => {
-                            gif_button.set_sensitive(true);
-                            set_status_err(
-                                &preview_status_label,
-                                &format!("GIF failed: {error}"),
-                            );
-                        }
-                    }
-                    glib::ControlFlow::Break
-                },
-            );
-        }
-    ));
-
-    // ── Save ───────────────────────────────────────────────────
-    save_button.connect_clicked(glib::clone!(
-        #[weak]
-        preview_status_label,
-        #[weak]
-        copy_button,
-        #[weak]
-        reveal_button,
-        #[strong]
-        preview_state,
-        move |_| {
-            let mut preview = preview_state.borrow_mut();
-            let preview_kind = preview.kind;
-
-            match save_preview_file(&mut preview) {
-                Ok(path) => {
-                    let can_reveal = preview.current_path.is_some();
-                    drop(preview);
-
-                    if preview_kind == PreviewKind::Recording {
-                        copy_button.set_sensitive(true);
-                        set_action_button_content(&copy_button, "open", "Open");
-                    }
-
-                    if can_reveal {
-                        reveal_button.set_sensitive(true);
-                    }
-                    set_status_ok(
-                        &preview_status_label,
-                        &format!("saved → {}", path.display()),
-                    );
-                }
-                Err(error) => {
-                    drop(preview);
-                    set_status_err(&preview_status_label, &format!("Save failed: {error}"));
-                }
-            }
-        }
-    ));
-
-    body.append(&preview_aspect);
-    body.append(preview_meta_label);
-    body.append(&actions);
-    body.append(preview_status_label);
-
-    body.upcast()
-}
-
-fn load_preview_image(
-    path: &Path,
-    preview_picture: &gtk::Picture,
-    preview_meta_label: &gtk::Label,
-) {
-    let file = gio::File::for_path(path);
-    preview_picture.set_file(Some(&file));
-    set_preview_meta(
-        preview_meta_label,
-        &format!("{}", path.file_name().unwrap_or_default().to_string_lossy()),
-    );
-}
-
-fn load_preview_recording(
-    path: &Path,
-    preview_state: &Rc<RefCell<PreviewState>>,
-    preview_picture: &gtk::Picture,
-    preview_meta_label: &gtk::Label,
-    copy_button: &gtk::Button,
-    reveal_button: &gtk::Button,
-) {
-    let preview_info = crate::capture::record::build_video_preview_info(path).ok();
-
-    {
-        let mut preview = preview_state.borrow_mut();
-        preview.kind = PreviewKind::Recording;
-        preview.current_path = Some(path.to_path_buf());
-        preview.thumbnail_path = preview_info
-            .as_ref()
-            .and_then(|info| info.thumbnail_path.clone());
-    }
-
-    if let Some(thumbnail_path) = preview_info
-        .as_ref()
-        .and_then(|info| info.thumbnail_path.as_ref())
-    {
-        let file = gio::File::for_path(thumbnail_path);
-        preview_picture.set_file(Some(&file));
-    } else {
-        preview_picture.set_file(Option::<&gio::File>::None);
-    }
-
-    set_action_button_content(copy_button, "open", "Open");
-    copy_button.set_sensitive(false);
-    reveal_button.set_sensitive(false);
-
-    if let Some(info) = preview_info {
-        set_preview_meta(preview_meta_label, &info.metadata_summary);
-    } else {
-        set_preview_meta(
-            preview_meta_label,
-            &format!("{}", path.file_name().unwrap_or_default().to_string_lossy()),
-        );
-    }
-}
-
-/// Makes a freshly converted GIF the active preview artifact, replacing the recording.
-/// Leaves the Save / Open / Reveal buttons in the same "produced, not yet saved" state a
-/// recording lands in, so the rest of the flow is identical.
-fn load_preview_gif(
-    path: &Path,
-    preview_state: &Rc<RefCell<PreviewState>>,
-    preview_picture: &gtk::Picture,
-    preview_meta_label: &gtk::Label,
-    copy_button: &gtk::Button,
-    reveal_button: &gtk::Button,
-) {
-    {
-        let mut preview = preview_state.borrow_mut();
-        // The recording temp and its thumbnail are superseded by the GIF.
-        if let Some(old) = preview.temp_path.take() {
-            let _ = std::fs::remove_file(old);
-        }
-        if let Some(old) = preview.thumbnail_path.take() {
-            let _ = std::fs::remove_file(old);
-        }
-        preview.temp_path = Some(path.to_path_buf());
-        preview.current_path = Some(path.to_path_buf());
-        preview.thumbnail_path = None;
-        preview.kind = PreviewKind::Recording;
-    }
-
-    let file = gio::File::for_path(path);
-    preview_picture.set_file(Some(&file));
-    set_preview_meta(
-        preview_meta_label,
-        &format!("{}", path.file_name().unwrap_or_default().to_string_lossy()),
-    );
-    set_action_button_content(copy_button, "open", "Open");
-    copy_button.set_sensitive(false);
-    reveal_button.set_sensitive(false);
-}
-
-#[allow(clippy::too_many_arguments)]
 fn run_capture_action(
     window: &gtk::ApplicationWindow,
-    stack: &gtk::Stack,
-    preview_state: &Rc<RefCell<PreviewState>>,
-    preview_picture: &gtk::Picture,
-    preview_meta_label: &gtk::Label,
-    preview_status_label: &gtk::Label,
-    save_button: &gtk::Button,
-    copy_button: &gtk::Button,
-    reveal_button: &gtk::Button,
-    gif_button: &gtk::Button,
     target: Target,
     delay_secs: u64,
     include_pointer: bool,
-    setup_feedback: Option<(&gtk::Button, &gtk::Label)>,
+    fire_button: &gtk::Button,
 ) {
     let window = window.clone();
-    let stack = stack.clone();
-    let preview_state = preview_state.clone();
-    let preview_picture = preview_picture.clone();
-    let preview_meta_label = preview_meta_label.clone();
-    let preview_status_label = preview_status_label.clone();
-    let save_button = save_button.clone();
-    let copy_button = copy_button.clone();
-    let reveal_button = reveal_button.clone();
-    let gif_button = gif_button.clone();
-    let setup_feedback = setup_feedback.map(|(b, l)| (b.clone(), l.clone()));
+    let fire_button = fire_button.clone();
 
-    window.hide();
+    fire_button.set_sensitive(false);
+    window.set_visible(false);
 
     let overlays = if target == Target::Monitor {
         show_monitor_identifiers(&crate::hyprland::enumerate_monitors())
     } else {
         Vec::new()
     };
-    let delay_ms = if target == Target::Monitor { MONITOR_OVERLAY_EXTRA_DELAY_MS } else { INITIAL_HIDE_DELAY_MS };
+    let delay_ms = if target == Target::Monitor {
+        MONITOR_OVERLAY_EXTRA_DELAY_MS
+    } else {
+        INITIAL_HIDE_DELAY_MS
+    };
 
     glib::timeout_add_local_once(Duration::from_millis(delay_ms), move || {
         // Phase 1: run slurp on a worker thread.
@@ -1482,13 +780,7 @@ fn run_capture_action(
 
             let selection = match sel_result {
                 Err(error) => {
-                    if let Some((cta_button, _)) = &setup_feedback {
-                        cta_button.set_sensitive(true);
-                    }
-                    report_action_error(
-                        "Capture failed", &error, &window, &stack,
-                        setup_feedback.as_ref(), &preview_status_label, true,
-                    );
+                    report_capture_error("Capture failed", &error, &window, &fire_button);
                     return glib::ControlFlow::Break;
                 }
                 Ok(s) => s,
@@ -1498,85 +790,63 @@ fn run_capture_action(
             // closelayer + one frame. This idle hands back to the GTK main loop before
             // spawning the grim thread.
             let window2 = window.clone();
-            let stack2 = stack.clone();
-            let preview_state2 = preview_state.clone();
-            let preview_picture2 = preview_picture.clone();
-            let preview_meta_label2 = preview_meta_label.clone();
-            let preview_status_label2 = preview_status_label.clone();
-            let save_button2 = save_button.clone();
-            let copy_button2 = copy_button.clone();
-            let reveal_button2 = reveal_button.clone();
-            let gif_button2 = gif_button.clone();
-            let setup_feedback2 = setup_feedback.clone();
+            let fire_button2 = fire_button.clone();
 
-            let proceed = move || wait_compositor_frame(move || {
-                let (cap_tx, cap_rx) =
-                    std::sync::mpsc::channel::<anyhow::Result<std::path::PathBuf>>();
-                std::thread::spawn(move || {
-                    let result = match target {
-                        Target::Area => crate::capture::screenshot::capture_geometry(
-                            &selection,
-                            include_pointer,
-                        ),
-                        Target::Window => {
-                            crate::capture::screenshot::capture_window_geometry(
+            let proceed = move || {
+                wait_compositor_frame(move || {
+                    let (cap_tx, cap_rx) =
+                        std::sync::mpsc::channel::<anyhow::Result<std::path::PathBuf>>();
+                    std::thread::spawn(move || {
+                        let result = match target {
+                            Target::Area => crate::capture::screenshot::capture_geometry(
                                 &selection,
                                 include_pointer,
-                            )
-                        }
-                        Target::Monitor => {
-                            crate::capture::screenshot::capture_by_monitor_name(
-                                &selection,
-                                include_pointer,
-                            )
-                        }
-                    };
-                    let _ = cap_tx.send(result);
-                });
-
-                glib::timeout_add_local(Duration::from_millis(SELECTION_POLL_INTERVAL_MS), move || {
-                    let result = match cap_rx.try_recv() {
-                        Ok(r) => r,
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {
-                            return glib::ControlFlow::Continue
-                        }
-                        Err(_) => return glib::ControlFlow::Break,
-                    };
-
-                    window2.present();
-                    if let Some((cta_button, _)) = &setup_feedback2 {
-                        cta_button.set_sensitive(true);
-                    }
-                    match result {
-                        Ok(path) => {
-                            {
-                                let mut preview = preview_state2.borrow_mut();
-                                preview.temp_path = Some(path.clone());
-                                preview.current_path = Some(path.clone());
-                                preview.thumbnail_path = None;
-                                preview.kind = PreviewKind::Screenshot;
+                            ),
+                            Target::Window => {
+                                crate::capture::screenshot::capture_window_geometry(
+                                    &selection,
+                                    include_pointer,
+                                )
                             }
-                            save_button2.remove_css_class("mode-rec");
-                            save_button2.add_css_class("mode-shot");
-                            load_preview_image(&path, &preview_picture2, &preview_meta_label2);
-                            set_status_neutral(&preview_status_label2, "");
-                            save_button2.set_sensitive(true);
-                            set_action_button_content(&copy_button2, "copy", "Copy");
-                            copy_button2.set_sensitive(true);
-                            reveal_button2.set_sensitive(false);
-                            gif_button2.set_visible(false);
-                            stack2.set_visible_child_name("preview");
-                        }
-                        Err(error) => {
-                            report_action_error(
-                                "Capture failed", &error, &window2, &stack2,
-                                setup_feedback2.as_ref(), &preview_status_label2, true,
-                            );
-                        }
-                    }
-                    glib::ControlFlow::Break
-                });
-            });
+                            Target::Monitor => {
+                                crate::capture::screenshot::capture_by_monitor_name(
+                                    &selection,
+                                    include_pointer,
+                                )
+                            }
+                        };
+                        let _ = cap_tx.send(result);
+                    });
+
+                    glib::timeout_add_local(
+                        Duration::from_millis(SELECTION_POLL_INTERVAL_MS),
+                        move || {
+                            let result = match cap_rx.try_recv() {
+                                Ok(r) => r,
+                                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                    return glib::ControlFlow::Continue;
+                                }
+                                Err(_) => return glib::ControlFlow::Break,
+                            };
+
+                            window2.present();
+                            fire_button2.set_sensitive(true);
+                            match result.and_then(thumbnail::for_screenshot) {
+                                Ok(info) => thumbnail::show(info),
+                                Err(error) => {
+                                    report_capture_error(
+                                        "Capture failed",
+                                        &error,
+                                        &window2,
+                                        &fire_button2,
+                                    );
+                                }
+                            }
+                            glib::ControlFlow::Break
+                        },
+                    );
+                })
+            };
             // The delay counts against the already-chosen geometry (plan: selection first).
             if delay_secs > 0 {
                 glib::timeout_add_local_once(Duration::from_secs(delay_secs), proceed);
@@ -1592,53 +862,31 @@ fn run_capture_action(
 #[allow(clippy::too_many_arguments)]
 fn start_recording_action(
     window: &gtk::ApplicationWindow,
-    stack: &gtk::Stack,
-    preview_state: &Rc<RefCell<PreviewState>>,
     recording_state: &Rc<RefCell<Option<ActiveRecording>>>,
     setup_cta: &Rc<RefCell<Option<gtk::Button>>>,
-    preview_picture: &gtk::Picture,
-    preview_meta_label: &gtk::Label,
-    preview_status_label: &gtk::Label,
-    setup_status_label: &gtk::Label,
-    save_button: &gtk::Button,
-    copy_button: &gtk::Button,
-    reveal_button: &gtk::Button,
-    gif_button: &gtk::Button,
     target: Target,
     show_hud: bool,
     delay_secs: u64,
-    setup_feedback: Option<(&gtk::Button, &gtk::Label)>,
+    fire_button: &gtk::Button,
 ) {
     let window = window.clone();
-    let stack = stack.clone();
-    let preview_state = preview_state.clone();
     let recording_state = recording_state.clone();
     let setup_cta = setup_cta.clone();
-    let preview_picture = preview_picture.clone();
-    let preview_meta_label = preview_meta_label.clone();
-    let preview_status_label = preview_status_label.clone();
-    let setup_status_label = setup_status_label.clone();
-    let save_button = save_button.clone();
-    let copy_button = copy_button.clone();
-    let reveal_button = reveal_button.clone();
-    let gif_button = gif_button.clone();
-    let setup_feedback = setup_feedback.map(|(b, l)| (b.clone(), l.clone()));
+    let fire_button = fire_button.clone();
 
-    if let Some((cta_button, status_label)) = &setup_feedback {
-        cta_button.set_sensitive(false);
-        if !status_label.label().is_empty() {
-            set_status_live(status_label, status_label.label().as_str());
-        }
-    }
-
-    window.hide();
+    fire_button.set_sensitive(false);
+    window.set_visible(false);
 
     let overlays = if target == Target::Monitor {
         show_monitor_identifiers(&crate::hyprland::enumerate_monitors())
     } else {
         Vec::new()
     };
-    let delay_ms = if target == Target::Monitor { MONITOR_OVERLAY_EXTRA_DELAY_MS } else { INITIAL_HIDE_DELAY_MS };
+    let delay_ms = if target == Target::Monitor {
+        MONITOR_OVERLAY_EXTRA_DELAY_MS
+    } else {
+        INITIAL_HIDE_DELAY_MS
+    };
 
     glib::timeout_add_local_once(Duration::from_millis(delay_ms), move || {
         // Phase 1: run slurp on a worker thread.
@@ -1668,11 +916,7 @@ fn start_recording_action(
 
             let selection = match sel_result {
                 Err(error) => {
-                    enable_setup_cta(&setup_cta);
-                    report_action_error(
-                        "Recording failed", &error, &window, &stack,
-                        setup_feedback.as_ref(), &setup_status_label, false,
-                    );
+                    report_capture_error("Recording failed", &error, &window, &fire_button);
                     return glib::ControlFlow::Break;
                 }
                 Ok(s) => s,
@@ -1681,73 +925,52 @@ fn start_recording_action(
             // Phase 2: wait for one compositor frame, then launch wf-recorder.
             // launch_recording is fast (spawn + file write) so runs on the GTK thread.
             let window2 = window.clone();
-            let stack2 = stack.clone();
-            let preview_state2 = preview_state.clone();
             let recording_state2 = recording_state.clone();
             let setup_cta2 = setup_cta.clone();
-            let preview_picture2 = preview_picture.clone();
-            let preview_meta_label2 = preview_meta_label.clone();
-            let preview_status_label2 = preview_status_label.clone();
-            let setup_status_label2 = setup_status_label.clone();
-            let save_button2 = save_button.clone();
-            let copy_button2 = copy_button.clone();
-            let reveal_button2 = reveal_button.clone();
-            let gif_button2 = gif_button.clone();
-            let setup_feedback2 = setup_feedback.clone();
+            let fire_button2 = fire_button.clone();
 
-            let proceed = move || wait_compositor_frame(move || {
-                match crate::capture::record::launch_recording(selection) {
-                    Err(error) => {
-                        enable_setup_cta(&setup_cta2);
-                        report_action_error(
-                            "Recording failed", &error, &window2, &stack2,
-                            setup_feedback2.as_ref(), &setup_status_label2, false,
-                        );
+            let proceed = move || {
+                wait_compositor_frame(move || {
+                    match crate::capture::record::launch_recording(selection) {
+                        Err(error) => {
+                            report_capture_error(
+                                "Recording failed",
+                                &error,
+                                &window2,
+                                &fire_button2,
+                            );
+                        }
+                        Ok(session) => {
+                            let hud_window = if show_hud {
+                                Some(create_recording_hud(&recording_state2))
+                            } else {
+                                None
+                            };
+
+                            let monitor = session.monitor;
+                            let indicator_window = if show_hud {
+                                None
+                            } else if crate::config::get().recording_indicator_enabled {
+                                let (w, _dot) =
+                                    create_recording_indicator(monitor, &recording_state2);
+                                Some(w)
+                            } else {
+                                None
+                            };
+
+                            *recording_state2.borrow_mut() = Some(ActiveRecording {
+                                child: session.child,
+                                temp_path: session.temp_path,
+                                hud_window,
+                                indicator_window,
+                                started_at: Instant::now(),
+                            });
+
+                            start_recording_poll(&window2, &recording_state2, &setup_cta2);
+                        }
                     }
-                    Ok(session) => {
-                        let hud_window = if show_hud {
-                            Some(create_recording_hud(&recording_state2))
-                        } else {
-                            None
-                        };
-
-                        let monitor = session.monitor;
-                        let indicator_window = if show_hud {
-                            None
-                        } else if crate::config::get().recording_indicator_enabled {
-                            let (w, _dot) = create_recording_indicator(monitor, &recording_state2);
-                            Some(w)
-                        } else {
-                            None
-                        };
-
-                        *recording_state2.borrow_mut() = Some(ActiveRecording {
-                            child: session.child,
-                            temp_path: session.temp_path,
-                            hud_window,
-                            indicator_window,
-                            started_at: Instant::now(),
-                        });
-
-                        start_recording_poll(
-                            &window2,
-                            &stack2,
-                            &preview_state2,
-                            &recording_state2,
-                            &setup_cta2,
-                            &preview_picture2,
-                            &preview_meta_label2,
-                            &preview_status_label2,
-                            &setup_status_label2,
-                            &save_button2,
-                            &copy_button2,
-                            &reveal_button2,
-                            &gif_button2,
-                        );
-                    }
-                }
-            });
-            // The delay counts against the already-chosen geometry (plan: selection first).
+                })
+            };
             if delay_secs > 0 {
                 glib::timeout_add_local_once(Duration::from_secs(delay_secs), proceed);
             } else {
@@ -1759,35 +982,14 @@ fn start_recording_action(
     });
 }
 
-#[allow(clippy::too_many_arguments)]
 fn start_recording_poll(
     window: &gtk::ApplicationWindow,
-    stack: &gtk::Stack,
-    preview_state: &Rc<RefCell<PreviewState>>,
     recording_state: &Rc<RefCell<Option<ActiveRecording>>>,
     setup_cta: &Rc<RefCell<Option<gtk::Button>>>,
-    preview_picture: &gtk::Picture,
-    preview_meta_label: &gtk::Label,
-    preview_status_label: &gtk::Label,
-    setup_status_label: &gtk::Label,
-    save_button: &gtk::Button,
-    copy_button: &gtk::Button,
-    reveal_button: &gtk::Button,
-    gif_button: &gtk::Button,
 ) {
     let window = window.clone();
-    let stack = stack.clone();
-    let preview_state = preview_state.clone();
     let recording_state = recording_state.clone();
     let setup_cta = setup_cta.clone();
-    let preview_picture = preview_picture.clone();
-    let preview_meta_label = preview_meta_label.clone();
-    let preview_status_label = preview_status_label.clone();
-    let setup_status_label = setup_status_label.clone();
-    let save_button = save_button.clone();
-    let copy_button = copy_button.clone();
-    let reveal_button = reveal_button.clone();
-    let gif_button = gif_button.clone();
 
     glib::timeout_add_local(Duration::from_millis(250), move || {
         let mut borrowed = recording_state.borrow_mut();
@@ -1808,34 +1010,17 @@ fn start_recording_poll(
                 }
                 crate::capture::record::clear_state_file();
                 window.present();
+                enable_setup_cta(&setup_cta);
 
                 if !status.success() || !finished.temp_path.exists() {
-                    enable_setup_cta(&setup_cta);
-                    set_status_err(&setup_status_label, "Recording failed or was cancelled");
-                    stack.set_visible_child_name("setup");
+                    toast::error("Recording failed", "the recording was cancelled or crashed");
                     return glib::ControlFlow::Break;
                 }
 
-                {
-                    let mut preview = preview_state.borrow_mut();
-                    preview.temp_path = Some(finished.temp_path.clone());
+                match thumbnail::for_recording(finished.temp_path) {
+                    Ok(info) => thumbnail::show(info),
+                    Err(error) => toast::error("Recording preview failed", &error.to_string()),
                 }
-                save_button.remove_css_class("mode-shot");
-                save_button.add_css_class("mode-rec");
-                load_preview_recording(
-                    &finished.temp_path,
-                    &preview_state,
-                    &preview_picture,
-                    &preview_meta_label,
-                    &copy_button,
-                    &reveal_button,
-                );
-                set_status_neutral(&preview_status_label, "");
-                save_button.set_sensitive(true);
-                copy_button.set_sensitive(false);
-                gif_button.set_visible(true);
-                gif_button.set_sensitive(true);
-                stack.set_visible_child_name("preview");
                 glib::ControlFlow::Break
             }
             Ok(None) => glib::ControlFlow::Continue,
@@ -1844,13 +1029,25 @@ fn start_recording_poll(
                 crate::capture::record::clear_state_file();
                 window.present();
                 enable_setup_cta(&setup_cta);
-                set_status_err(
-                    &setup_status_label,
-                    &format!("Recording poll failed: {error}"),
-                );
-                stack.set_visible_child_name("setup");
+                toast::error("Recording poll failed", &error.to_string());
                 glib::ControlFlow::Break
             }
+        }
+    });
+}
+
+fn report_capture_error(
+    prefix: &str,
+    error: &anyhow::Error,
+    window: &gtk::ApplicationWindow,
+    fire_button: &gtk::Button,
+) {
+    window.present();
+    fire_button.set_sensitive(true);
+    let retry_button = fire_button.clone();
+    toast::error_with(prefix, &error.to_string(), "Retry", move || {
+        if retry_button.is_sensitive() {
+            retry_button.emit_clicked();
         }
     });
 }
@@ -1868,9 +1065,7 @@ fn enable_setup_cta(setup_cta: &Rc<RefCell<Option<gtk::Button>>>) {
     }
 }
 
-fn create_recording_hud(
-    recording_state: &Rc<RefCell<Option<ActiveRecording>>>,
-) -> gtk::Window {
+fn create_recording_hud(recording_state: &Rc<RefCell<Option<ActiveRecording>>>) -> gtk::Window {
     let hud = gtk::Window::builder()
         .title("Hyprscreen HUD")
         .decorated(false)
@@ -2055,68 +1250,6 @@ fn active_target(area_button: &gtk::ToggleButton, window_button: &gtk::ToggleBut
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn clear_preview(
-    preview_state: &Rc<RefCell<PreviewState>>,
-    preview_picture: &gtk::Picture,
-    preview_meta_label: &gtk::Label,
-    preview_status_label: &gtk::Label,
-    save_button: &gtk::Button,
-    copy_button: &gtk::Button,
-    reveal_button: &gtk::Button,
-    gif_button: &gtk::Button,
-) {
-    let mut preview = preview_state.borrow_mut();
-    if let Some(path) = preview.temp_path.take() {
-        let _ = std::fs::remove_file(path);
-    }
-    if let Some(path) = preview.thumbnail_path.take() {
-        let _ = std::fs::remove_file(path);
-    }
-    preview.current_path = None;
-    preview.kind = PreviewKind::Screenshot;
-    drop(preview);
-
-    preview_picture.set_file(Option::<&gio::File>::None);
-    clear_preview_meta(preview_meta_label);
-    set_status_neutral(preview_status_label, "");
-    save_button.set_sensitive(false);
-    set_action_button_content(copy_button, "copy", "Copy");
-    copy_button.set_sensitive(false);
-    reveal_button.set_sensitive(false);
-    gif_button.set_sensitive(false);
-    gif_button.set_visible(false);
-}
-
-fn open_preview_file(
-    preview_state: &PreviewState,
-) -> anyhow::Result<crate::capture::record::OpenMethod> {
-    if preview_state.kind != PreviewKind::Recording {
-        anyhow::bail!("open is only available for recordings")
-    }
-    let Some(path) = &preview_state.current_path else {
-        anyhow::bail!("there is no recording to open")
-    };
-    if preview_state.temp_path.is_some() && preview_state.current_path == preview_state.temp_path {
-        anyhow::bail!("save the recording before opening it")
-    }
-    crate::capture::record::open_video_file(path)
-}
-
-fn set_status(label: &gtk::Label, message: &str, kind: StatusKind) {
-    label.set_label(message);
-    label.set_visible(!message.is_empty());
-    for cls in ["err", "ok", "live"] {
-        label.remove_css_class(cls);
-    }
-    match kind {
-        StatusKind::Neutral => {}
-        StatusKind::Error => label.add_css_class("err"),
-        StatusKind::Success => label.add_css_class("ok"),
-        StatusKind::Live => label.add_css_class("live"),
-    }
-}
-
 fn set_button_text(button: &impl IsA<gtk::Button>, text: &str) {
     let button = button.as_ref();
 
@@ -2132,82 +1265,10 @@ fn set_button_text(button: &impl IsA<gtk::Button>, text: &str) {
     button.set_child(Some(&label));
 }
 
-fn set_status_neutral(label: &gtk::Label, message: &str) {
-    set_status(label, message, StatusKind::Neutral);
-}
-
-fn set_status_live(label: &gtk::Label, message: &str) {
-    set_status(label, message, StatusKind::Live);
-}
-
-fn set_status_ok(label: &gtk::Label, message: &str) {
-    set_status(label, message, StatusKind::Success);
-}
-
-fn set_status_err(label: &gtk::Label, message: &str) {
-    set_status(label, message, StatusKind::Error);
-}
-
-fn report_action_error(
-    prefix: &str,
-    error: &anyhow::Error,
-    window: &gtk::ApplicationWindow,
-    stack: &gtk::Stack,
-    setup_feedback: Option<&(gtk::Button, gtk::Label)>,
-    fallback_label: &gtk::Label,
-    navigate_on_feedback: bool,
-) {
-    window.present();
-    if let Some((_, status_label)) = setup_feedback {
-        set_status_err(status_label, &format!("{prefix}: {error}"));
-        if navigate_on_feedback {
-            stack.set_visible_child_name("setup");
-        }
-    } else {
-        set_status_err(fallback_label, &format!("{prefix}: {error}"));
-        if !navigate_on_feedback {
-            stack.set_visible_child_name("setup");
-        }
-    }
-}
-
-fn set_status_stop_hint(label: &gtk::Label) {
-    for cls in ["err", "ok", "live"] {
-        label.remove_css_class(cls);
-    }
-    label.set_markup("run \"<b>hyprscreen stop</b>\" to end recording");
-    label.set_visible(true);
-}
-
-fn set_preview_meta(label: &gtk::Label, message: &str) {
-    label.set_label(message);
-}
-
-fn clear_preview_meta(label: &gtk::Label) {
-    label.set_label("");
-}
-
-fn set_action_button_content(button: &gtk::Button, icon_key: &str, text: &str) {
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(5)
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .build();
-    let icon = icon_image(icon_key, 16, Some("hs-abtn-icon"));
-    let label = gtk::Label::builder()
-        .label(text)
-        .css_classes(["hs-abtn-label"])
-        .build();
-    content.append(&icon);
-    content.append(&label);
-    button.set_child(Some(&content));
-}
-
 fn set_primary_button_content(button: &gtk::Button, mode: Mode) {
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(9)
+        .spacing(10)
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
         .build();
@@ -2239,147 +1300,4 @@ fn set_primary_button_content(button: &gtk::Button, mode: Mode) {
     content.append(&label);
     content.append(&kbd);
     button.set_child(Some(&content));
-}
-
-fn icon_image(icon_key: &str, size: i32, css_class: Option<&str>) -> gtk::Image {
-    icon_image_colored(icon_key, size, css_class, "#EDEEF2")
-}
-
-// v2 icons are authored with stroke="currentColor"; librsvg has no CSS context
-// here, so the color is baked in before rasterization.
-fn icon_image_colored(
-    icon_key: &str,
-    size: i32,
-    css_class: Option<&str>,
-    color: &str,
-) -> gtk::Image {
-    let image = gtk::Image::from_paintable(Some(&icon_texture(icon_key, size, color)));
-    image.set_pixel_size(size);
-    if let Some(css_class) = css_class {
-        image.add_css_class(css_class);
-    }
-    image
-}
-
-fn icon_texture(icon_key: &str, size: i32, color: &str) -> gtk::gdk::Texture {
-    let svg = String::from_utf8_lossy(icon_bytes(icon_key)).replace("currentColor", color);
-    let bytes = glib::Bytes::from_owned(svg.into_bytes());
-    let stream = gio::MemoryInputStream::from_bytes(&bytes);
-    let render = size * 2;
-    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream_at_scale(
-        &stream,
-        render,
-        render,
-        true,
-        gio::Cancellable::NONE,
-    )
-    .expect("failed to rasterize embedded SVG");
-    gtk::gdk::Texture::for_pixbuf(&pixbuf)
-}
-
-fn icon_bytes(icon_key: &str) -> &'static [u8] {
-    match icon_key {
-        "area" => include_bytes!("../../assets/icons/area.svg"),
-        "window" => include_bytes!("../../assets/icons/window.svg"),
-        "monitor" => include_bytes!("../../assets/icons/monitor.svg"),
-        "back" => include_bytes!("../../assets/icons/back.svg"),
-        "refresh" => include_bytes!("../../assets/icons/refresh.svg"),
-        "save" => include_bytes!("../../assets/icons/save.svg"),
-        "copy" => include_bytes!("../../assets/icons/copy.svg"),
-        "reveal" => include_bytes!("../../assets/icons/reveal.svg"),
-        "open" => include_bytes!("../../assets/icons/open.svg"),
-        "gif" => include_bytes!("../../assets/icons/gif.svg"),
-        "shutter" => include_bytes!("../../assets/icons/shutter.svg"),
-        "shot" => include_bytes!("../../assets/icons/shot.svg"),
-        "rec" => include_bytes!("../../assets/icons/rec.svg"),
-        "timer" => include_bytes!("../../assets/icons/timer.svg"),
-        "pointer" => include_bytes!("../../assets/icons/pointer.svg"),
-        "chevron" => include_bytes!("../../assets/icons/chevron.svg"),
-        "close" => include_bytes!("../../assets/icons/close.svg"),
-        "pen" => include_bytes!("../../assets/icons/pen.svg"),
-        "share" => include_bytes!("../../assets/icons/share.svg"),
-        "trash" => include_bytes!("../../assets/icons/trash.svg"),
-        "play" => include_bytes!("../../assets/icons/play.svg"),
-        "arrow" => include_bytes!("../../assets/icons/arrow.svg"),
-        "box" => include_bytes!("../../assets/icons/box.svg"),
-        "text" => include_bytes!("../../assets/icons/text.svg"),
-        "blur" => include_bytes!("../../assets/icons/blur.svg"),
-        "highlight" => include_bytes!("../../assets/icons/highlight.svg"),
-        "step" => include_bytes!("../../assets/icons/step.svg"),
-        "undo" => include_bytes!("../../assets/icons/undo.svg"),
-        "pause" => include_bytes!("../../assets/icons/pause.svg"),
-        "restart" => include_bytes!("../../assets/icons/restart.svg"),
-        "mic" => include_bytes!("../../assets/icons/mic.svg"),
-        "mic-off" => include_bytes!("../../assets/icons/mic-off.svg"),
-        "cam" => include_bytes!("../../assets/icons/cam.svg"),
-        "cam-off" => include_bytes!("../../assets/icons/cam-off.svg"),
-        "draw" => include_bytes!("../../assets/icons/draw.svg"),
-        "keyboard" => include_bytes!("../../assets/icons/keyboard.svg"),
-        "alert" => include_bytes!("../../assets/icons/alert.svg"),
-        "check" => include_bytes!("../../assets/icons/check.svg"),
-        _ => include_bytes!("../../assets/icons/area.svg"),
-    }
-}
-
-fn copy_preview_to_clipboard(path: &Option<PathBuf>) -> anyhow::Result<()> {
-    let Some(path) = path else {
-        anyhow::bail!("there is no screenshot to copy")
-    };
-
-    let mut child = Command::new("wl-copy")
-        .arg("--type")
-        .arg("image/png")
-        .stdin(Stdio::piped())
-        .spawn()?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("failed to open wl-copy stdin"))?;
-    let bytes = std::fs::read(path)?;
-    stdin.write_all(&bytes)?;
-    drop(stdin);
-
-    let status = child.wait()?;
-    if !status.success() {
-        anyhow::bail!("wl-copy failed")
-    }
-    Ok(())
-}
-
-fn save_preview_file(preview_state: &mut PreviewState) -> anyhow::Result<PathBuf> {
-    let Some(source) = &preview_state.current_path else {
-        anyhow::bail!("there is no file to save")
-    };
-
-    let save_dir = match preview_state.kind {
-        PreviewKind::Screenshot => crate::config::get().save_dir_screenshots.clone(),
-        PreviewKind::Recording => crate::config::get().save_dir_recordings.clone(),
-    };
-    std::fs::create_dir_all(&save_dir)?;
-
-    let file_name = source
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("temporary file path has no file name"))?;
-    let destination = save_dir.join(file_name);
-
-    if *source == destination {
-        return Ok(destination);
-    }
-
-    std::fs::copy(source, &destination)?;
-    preview_state.current_path = Some(destination.clone());
-    Ok(destination)
-}
-
-fn reveal_preview_file(
-    preview_state: &PreviewState,
-) -> anyhow::Result<crate::capture::record::RevealMethod> {
-    let Some(path) = &preview_state.current_path else {
-        anyhow::bail!("there is no file to reveal")
-    };
-    if preview_state.temp_path.is_some() && preview_state.current_path == preview_state.temp_path {
-        anyhow::bail!("save the file before revealing it")
-    }
-    crate::capture::record::reveal_in_file_manager(path)
 }
