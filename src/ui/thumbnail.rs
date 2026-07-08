@@ -13,7 +13,6 @@ use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::time::Duration;
 
-use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 
@@ -21,7 +20,38 @@ use super::icons::icon_image_colored;
 use super::toast;
 
 const TITLE: &str = "Hyprscreen Thumbnail";
-const CARD_WIDTH: i32 = 268;
+const CARD_WIDTH: i32 = 536;
+const PREVIEW_HEIGHT: i32 = CARD_WIDTH * 10 / 16;
+
+/// Loads `path` scaled and center-cropped to exactly `w`×`h` (cover). A
+/// `gtk::Picture` reports the full image as its natural size, which a
+/// non-resizable window adopts — pre-scaling keeps the card at its fixed
+/// size regardless of the capture's resolution.
+fn set_cover_image(picture: &gtk::Picture, path: &Path, w: i32, h: i32) {
+    use gtk::gdk_pixbuf::Pixbuf;
+
+    let Ok(info) = Pixbuf::from_file(path).map(|p| (p.width() as f64, p.height() as f64)) else {
+        picture.set_paintable(gtk::gdk::Paintable::NONE);
+        return;
+    };
+    let (src_w, src_h) = info;
+    // Scale so the image covers the target, then crop the overflow.
+    let (fit_w, fit_h) = if src_w / src_h > w as f64 / h as f64 {
+        (-1, h)
+    } else {
+        (w, -1)
+    };
+    let scaled = Pixbuf::from_file_at_scale(path, fit_w, fit_h, true);
+    let cropped = scaled.ok().map(|p| {
+        let x = ((p.width() - w) / 2).max(0);
+        let y = ((p.height() - h) / 2).max(0);
+        p.new_subpixbuf(x, y, w.min(p.width()), h.min(p.height()))
+    });
+    match cropped {
+        Some(pixbuf) => picture.set_paintable(Some(&gtk::gdk::Texture::for_pixbuf(&pixbuf))),
+        None => picture.set_paintable(gtk::gdk::Paintable::NONE),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThumbKind {
@@ -136,14 +166,14 @@ pub fn show(info: ThumbInfo) {
     let overlay = gtk::Overlay::new();
     let picture = gtk::Picture::builder()
         .width_request(CARD_WIDTH)
-        .height_request(CARD_WIDTH * 10 / 16)
+        .height_request(PREVIEW_HEIGHT)
         .content_fit(gtk::ContentFit::Cover)
         .css_classes(["hs-thumb-preview"])
         .build();
     {
         let d = data.borrow();
         let shown = d.info.display_path.as_ref().unwrap_or(&d.info.file_path);
-        picture.set_file(Some(&gio::File::for_path(shown)));
+        set_cover_image(&picture, shown, CARD_WIDTH, PREVIEW_HEIGHT);
     }
     overlay.set_child(Some(&picture));
 
@@ -250,7 +280,7 @@ pub fn show(info: ThumbInfo) {
         let data = data_for_annotate.clone();
         super::annotate::open(&path, move |new_path| {
             // Refresh the card with the annotated result.
-            picture.set_file(Some(&gio::File::for_path(new_path)));
+            set_cover_image(&picture, new_path, CARD_WIDTH, PREVIEW_HEIGHT);
             {
                 let mut d = data.borrow_mut();
                 d.info.meta = screenshot_meta(new_path);

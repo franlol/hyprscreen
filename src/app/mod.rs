@@ -1032,15 +1032,17 @@ window.hs-annot-window {
     filter: brightness(1.07);
 }
 
-entry.hs-annot-entry {
+textview.hs-annot-entry {
     background: rgba(19, 20, 26, 0.92);
     color: #EDEEF2;
     border: 1px solid #5EE6D0;
     border-radius: 7px;
-    padding: 5px 8px;
     font-size: 13px;
-    min-height: 0;
     caret-color: #5EE6D0;
+}
+
+textview.hs-annot-entry > text {
+    background: transparent;
 }
 
 

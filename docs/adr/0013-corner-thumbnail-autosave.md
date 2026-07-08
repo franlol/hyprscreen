@@ -8,7 +8,7 @@ Accepted (amends 0001 and 0002; supersedes 0006 and 0007)
 
 The v1 flow kept every capture inside the main window: a preview page with
 Back / New / Save / Copy·Open / Reveal / GIF. The v2 design replaces this with
-a 268px corner thumbnail card at the top-right of the focused monitor and
+a 536px corner thumbnail card at the top-right of the focused monitor and
 default auto-saving, so the dock never changes shape and the result is
 non-blocking.
 

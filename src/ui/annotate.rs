@@ -65,6 +65,16 @@ thread_local! {
     static CURRENT: RefCell<Option<gtk::Window>> = const { RefCell::new(None) };
 }
 
+/// Floating text entry currently open on the canvas overlay.
+/// `x`/`y` are the view coordinates of the click that spawned it.
+struct ActiveText {
+    view: gtk::TextView,
+    x: f64,
+    y: f64,
+}
+
+type ActiveTextCell = Rc<RefCell<Option<ActiveText>>>;
+
 fn parse_hex(color: &str) -> [f64; 3] {
     let c = color.trim_start_matches('#');
     let component = |i: usize| {
@@ -103,6 +113,7 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
         drag: None,
         blur_cache: HashMap::new(),
     }));
+    let active_text: ActiveTextCell = Rc::new(RefCell::new(None));
 
     let window = gtk::Window::builder()
         .title(TITLE)
@@ -180,23 +191,6 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
             button
         })
         .collect();
-    for (button, (tool, _, _)) in tool_buttons.iter().zip(tools.iter()) {
-        let state = state.clone();
-        let tool = *tool;
-        let all = tool_buttons.clone();
-        button.connect_toggled(move |b| {
-            if b.is_active() {
-                state.borrow_mut().tool = tool;
-                for other in &all {
-                    if other != b {
-                        other.set_active(false);
-                    }
-                }
-            } else if state.borrow().tool == tool {
-                b.set_active(true);
-            }
-        });
-    }
 
     let rail_divider = gtk::Box::builder()
         .height_request(1)
@@ -228,6 +222,28 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
     canvas_overlay.set_child(Some(&canvas));
     main.append(&canvas_overlay);
     root.append(&main);
+
+    for (button, (tool, _, _)) in tool_buttons.iter().zip(tools.iter()) {
+        let state = state.clone();
+        let tool = *tool;
+        let all = tool_buttons.clone();
+        let active_text = active_text.clone();
+        let overlay = canvas_overlay.clone();
+        let canvas = canvas.clone();
+        button.connect_toggled(move |b| {
+            if b.is_active() {
+                commit_active_text(&active_text, &overlay, &canvas, &state);
+                state.borrow_mut().tool = tool;
+                for other in &all {
+                    if other != b {
+                        other.set_active(false);
+                    }
+                }
+            } else if state.borrow().tool == tool {
+                b.set_active(true);
+            }
+        });
+    }
 
     // ── Footer ─────────────────────────────────────────────────
     let footer = gtk::Box::builder()
@@ -393,6 +409,7 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
         let state = state.clone();
         let canvas = canvas.clone();
         let overlay = canvas_overlay.clone();
+        let active_text = active_text.clone();
         click.connect_pressed(move |_, _, x, y| {
             let tool = state.borrow().tool;
             match tool {
@@ -411,7 +428,7 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
                     canvas.queue_draw();
                 }
                 Tool::Text => {
-                    spawn_text_entry(&overlay, &canvas, &state, x, y);
+                    spawn_text_entry(&overlay, &canvas, &state, &active_text, x, y);
                 }
                 _ => {}
             }
@@ -471,7 +488,11 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
     let file_path = path.to_path_buf();
     {
         let state = state.clone();
+        let active_text = active_text.clone();
+        let overlay = canvas_overlay.clone();
+        let canvas = canvas.clone();
         copy_button.connect_clicked(move |_| {
+            commit_active_text(&active_text, &overlay, &canvas, &state);
             match export_to_temp(&state) {
                 Ok(temp) => {
                     let result = super::thumbnail::copy_image_file_to_clipboard(&temp);
@@ -489,7 +510,11 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
         let state = state.clone();
         let window = window.clone();
         let on_done = Rc::new(on_done);
+        let active_text = active_text.clone();
+        let overlay = canvas_overlay.clone();
+        let canvas = canvas.clone();
         done_button.connect_clicked(move |_| {
+            commit_active_text(&active_text, &overlay, &canvas, &state);
             match export_to(&state, &file_path) {
                 Ok(()) => {
                     on_done(&file_path);
@@ -523,54 +548,106 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
     CURRENT.set(Some(window));
 }
 
+/// Commits the floating text entry, if any: pushes its text as a
+/// `Shape::Text` (blank text is dropped) and removes the widget.
+fn commit_active_text(
+    active: &ActiveTextCell,
+    overlay: &gtk::Overlay,
+    canvas: &gtk::DrawingArea,
+    state: &Rc<RefCell<EditorState>>,
+) {
+    let Some(ActiveText { view, x, y }) = active.borrow_mut().take() else {
+        return;
+    };
+    let buffer = view.buffer();
+    let text = buffer
+        .text(&buffer.start_iter(), &buffer.end_iter(), false)
+        .trim_end()
+        .to_string();
+    if !text.trim().is_empty() {
+        let mut s = state.borrow_mut();
+        let scale = s.scale;
+        let color = s.color;
+        s.shapes.push(Shape::Text { pos: (x / scale, (y / scale) + 18.0 / scale), text, color });
+    }
+    overlay.remove_overlay(&view);
+    canvas.queue_draw();
+}
+
 fn spawn_text_entry(
     overlay: &gtk::Overlay,
     canvas: &gtk::DrawingArea,
     state: &Rc<RefCell<EditorState>>,
+    active: &ActiveTextCell,
     x: f64,
     y: f64,
 ) {
-    let entry = gtk::Entry::builder()
+    commit_active_text(active, overlay, canvas, state);
+
+    // A TextView (not an Entry) so the box grows with its content and
+    // Shift+Enter can insert new lines.
+    let view = gtk::TextView::builder()
         .css_classes(["hs-annot-entry"])
         .halign(gtk::Align::Start)
         .valign(gtk::Align::Start)
         .margin_start(x as i32)
         .margin_top(y as i32)
         .width_request(160)
+        .wrap_mode(gtk::WrapMode::None)
+        .accepts_tab(false)
+        .left_margin(8)
+        .right_margin(8)
+        .top_margin(5)
+        .bottom_margin(5)
         .build();
-    overlay.add_overlay(&entry);
-    entry.grab_focus();
+    overlay.add_overlay(&view);
+    active.replace(Some(ActiveText { view: view.clone(), x, y }));
 
-    let overlay_for_commit = overlay.clone();
+    // TextView is a scrollable: its natural size ignores content, so size it
+    // from the text's pango layout and grow as the buffer changes.
+    let resize = {
+        let view = view.clone();
+        move || {
+            let buffer = view.buffer();
+            let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+            let layout = view.create_pango_layout(Some(text.as_str()));
+            let (text_w, text_h) = layout.pixel_size();
+            // Margins, border, and caret slack around the content.
+            view.set_size_request((text_w + 22).max(160), text_h + 12);
+        }
+    };
+    resize();
+    view.buffer().connect_changed(move |_| resize());
+
+    let view_for_focus = view.clone();
+    glib::idle_add_local_once(move || {
+        view_for_focus.grab_focus();
+    });
+
+    let active = active.clone();
+    let overlay = overlay.clone();
     let canvas = canvas.clone();
     let state = state.clone();
-    entry.connect_activate(move |entry| {
-        let text = entry.text().to_string();
-        if !text.trim().is_empty() {
-            let mut s = state.borrow_mut();
-            let scale = s.scale;
-            let color = s.color;
-            s.shapes.push(Shape::Text { pos: (x / scale, (y / scale) + 18.0 / scale), text, color });
+    let keys = gtk::EventControllerKey::new();
+    // Capture phase: intercept Enter before the TextView inserts a newline.
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(move |_, key, _, modifier| match key {
+        gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter
+            if !modifier.contains(gtk::gdk::ModifierType::SHIFT_MASK) =>
+        {
+            commit_active_text(&active, &overlay, &canvas, &state);
+            glib::Propagation::Stop
         }
-        overlay_for_commit.remove_overlay(entry);
-        canvas.queue_draw();
-    });
-    let overlay_for_escape = overlay.clone();
-    let escape = gtk::EventControllerKey::new();
-    escape.connect_key_pressed(move |controller, key, _, _| {
-        if key == gtk::gdk::Key::Escape {
-            if let Some(entry) = controller
-                .widget()
-                .and_then(|w| w.downcast::<gtk::Entry>().ok())
-            {
-                overlay_for_escape.remove_overlay(&entry);
+        gtk::gdk::Key::Escape => {
+            // Esc aborts: remove without committing.
+            if let Some(ActiveText { view, .. }) = active.borrow_mut().take() {
+                overlay.remove_overlay(&view);
             }
             glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
         }
+        _ => glib::Propagation::Proceed,
     });
-    entry.add_controller(escape);
+    view.add_controller(keys);
 }
 
 fn normalized_rect(ax: f64, ay: f64, bx: f64, by: f64) -> (f64, f64, f64, f64) {
@@ -603,7 +680,11 @@ fn shape_bbox(shape: &Shape) -> (f64, f64, f64, f64) {
             (min_x, min_y, max_x - min_x, max_y - min_y)
         }
         Shape::Rect { rect, .. } | Shape::Highlight { rect, .. } | Shape::Blur { rect } => *rect,
-        Shape::Text { pos, text, .. } => (pos.0, pos.1 - 20.0, text.len() as f64 * 10.0, 26.0),
+        Shape::Text { pos, text, .. } => {
+            let lines = text.lines().count().max(1) as f64;
+            let widest = text.lines().map(str::len).max().unwrap_or(0) as f64;
+            (pos.0, pos.1 - 20.0, widest * 10.0, 6.0 + lines * 20.0)
+        }
         Shape::Step { pos, .. } => (pos.0 - 13.0, pos.1 - 13.0, 26.0, 26.0),
     }
 }
@@ -725,13 +806,17 @@ fn draw_scene(cr: &gtk::cairo::Context, state: &mut EditorState) {
                     gtk::cairo::FontWeight::Bold,
                 );
                 cr.set_font_size(font_size);
-                // Soft shadow for legibility on any background.
-                cr.set_source_rgba(0.0, 0.0, 0.0, 0.55);
-                cr.move_to(pos.0 + 1.5 / state.scale, pos.1 + 1.5 / state.scale);
-                let _ = cr.show_text(text);
-                cr.set_source_rgb(color[0], color[1], color[2]);
-                cr.move_to(pos.0, pos.1);
-                let _ = cr.show_text(text);
+                let line_height = font_size * 1.35;
+                for (index, line) in text.lines().enumerate() {
+                    let line_y = pos.1 + index as f64 * line_height;
+                    // Soft shadow for legibility on any background.
+                    cr.set_source_rgba(0.0, 0.0, 0.0, 0.55);
+                    cr.move_to(pos.0 + 1.5 / state.scale, line_y + 1.5 / state.scale);
+                    let _ = cr.show_text(line);
+                    cr.set_source_rgb(color[0], color[1], color[2]);
+                    cr.move_to(pos.0, line_y);
+                    let _ = cr.show_text(line);
+                }
             }
             Shape::Step { pos, n, color } => {
                 let radius = 13.0 / state.scale;
