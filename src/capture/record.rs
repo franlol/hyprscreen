@@ -187,6 +187,7 @@ pub fn launch_recording(
         RecordingSelection::Geometry { geometry, monitor, is_window } => {
             let inset_px = if is_window { super::hyprland_window_inset() } else { 2 };
             let inset = super::inset_geometry(&geometry, inset_px).unwrap_or(geometry);
+            let inset = even_geometry(&inset).unwrap_or(inset);
             (LaunchTarget::Geometry(inset), monitor)
         }
         RecordingSelection::OutputName { name, placement } => {
@@ -198,6 +199,14 @@ pub fn launch_recording(
     let child = spawn_segment(&spec, &temp_path)?;
     write_state_file(child.id(), &temp_path)?;
     Ok(RecordingSession { child, temp_path, monitor, spec })
+}
+
+/// Rounds geometry width/height down to even values. yuv420p encoders (x264, vp9)
+/// and downstream converters (e.g. SVT-AV1) reject or mishandle odd dimensions,
+/// and slurp selections can be any pixel size.
+fn even_geometry(geometry: &str) -> Option<String> {
+    let (x, y, w, h) = super::parse_geometry(geometry).ok()?;
+    Some(format!("{},{} {}x{}", x, y, (w & !1).max(2), (h & !1).max(2)))
 }
 
 /// Spawns one wf-recorder segment for `spec` writing to `path`.
