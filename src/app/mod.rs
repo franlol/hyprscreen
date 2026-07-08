@@ -1045,6 +1045,12 @@ textview.hs-annot-entry > text {
     background: transparent;
 }
 
+textview.hs-annot-entry.ink0 { color: #5EE6D0; border-color: #5EE6D0; caret-color: #5EE6D0; }
+textview.hs-annot-entry.ink1 { color: #FF5D5D; border-color: #FF5D5D; caret-color: #FF5D5D; }
+textview.hs-annot-entry.ink2 { color: #FFD23F; border-color: #FFD23F; caret-color: #FFD23F; }
+textview.hs-annot-entry.ink3 { color: #7CA8FF; border-color: #7CA8FF; caret-color: #7CA8FF; }
+textview.hs-annot-entry.ink4 { color: #FFFFFF; border-color: #FFFFFF; caret-color: #FFFFFF; }
+
 
 /* ═══════════════ Shortcuts cheatsheet ═══════════════ */
 

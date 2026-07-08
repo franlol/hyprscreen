@@ -278,9 +278,13 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
         let state = state.clone();
         let color = parse_hex(hex);
         let all = swatch_buttons.clone();
+        let active_text = active_text.clone();
         button.connect_toggled(move |b| {
             if b.is_active() {
                 state.borrow_mut().color = color;
+                if let Some(ActiveText { view, .. }) = active_text.borrow().as_ref() {
+                    apply_ink_class(view, color);
+                }
                 for other in &all {
                     if other != b {
                         other.set_active(false);
@@ -574,6 +578,20 @@ fn commit_active_text(
     canvas.queue_draw();
 }
 
+/// CSS class (`ink0`..`ink4`) tinting the floating text entry to a palette color.
+fn ink_class(color: [f64; 3]) -> Option<String> {
+    INK_COLORS.iter().position(|hex| parse_hex(hex) == color).map(|i| format!("ink{i}"))
+}
+
+fn apply_ink_class(view: &gtk::TextView, color: [f64; 3]) {
+    for i in 0..INK_COLORS.len() {
+        view.remove_css_class(&format!("ink{i}"));
+    }
+    if let Some(class) = ink_class(color) {
+        view.add_css_class(&class);
+    }
+}
+
 fn spawn_text_entry(
     overlay: &gtk::Overlay,
     canvas: &gtk::DrawingArea,
@@ -600,6 +618,7 @@ fn spawn_text_entry(
         .top_margin(5)
         .bottom_margin(5)
         .build();
+    apply_ink_class(&view, state.borrow().color);
     overlay.add_overlay(&view);
     active.replace(Some(ActiveText { view: view.clone(), x, y }));
 
