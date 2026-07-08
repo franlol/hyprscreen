@@ -1,7 +1,7 @@
 //! Annotation editor (ADR-0018).
 //!
-//! A cairo shape-list editor over the captured image: arrow, box, text,
-//! step counter, highlight, and pixelate-blur tools with five ink colors,
+//! A cairo shape-list editor over the captured image: arrow, free draw, box,
+//! text, step counter, highlight, and pixelate-blur tools with five ink colors,
 //! undo, Copy (clipboard) and Done (overwrite the file). Geometry is stored
 //! in image coordinates, so export replays the same shapes at native
 //! resolution.
@@ -28,6 +28,7 @@ pub const INK_COLORS: [&str; 5] = ["#5EE6D0", "#FF5D5D", "#FFD23F", "#7CA8FF", "
 enum Tool {
     Select,
     Arrow,
+    Draw,
     Box,
     Text,
     Step,
@@ -38,6 +39,7 @@ enum Tool {
 #[derive(Clone, Debug)]
 enum Shape {
     Arrow { a: (f64, f64), b: (f64, f64), color: [f64; 3] },
+    Path { points: Vec<(f64, f64)>, color: [f64; 3] },
     Rect { rect: (f64, f64, f64, f64), color: [f64; 3] },
     Highlight { rect: (f64, f64, f64, f64), color: [f64; 3] },
     Text { pos: (f64, f64), text: String, color: [f64; 3] },
@@ -149,9 +151,10 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
         .content_height(view_h as i32)
         .build();
 
-    let tools: [(Tool, &str, &str); 7] = [
+    let tools: [(Tool, &str, &str); 8] = [
         (Tool::Select, "pointer", "Select / move · V"),
         (Tool::Arrow, "arrow", "Arrow · A"),
+        (Tool::Draw, "draw", "Draw · D"),
         (Tool::Box, "box", "Box · B"),
         (Tool::Text, "text", "Text · T"),
         (Tool::Step, "step", "Step counter · N"),
@@ -314,6 +317,9 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
                 Tool::Arrow => {
                     s.draft = Some(Shape::Arrow { a: (ix, iy), b: (ix, iy), color });
                 }
+                Tool::Draw => {
+                    s.draft = Some(Shape::Path { points: vec![(ix, iy)], color });
+                }
                 Tool::Box => {
                     s.draft = Some(Shape::Rect { rect: (ix, iy, 0.0, 0.0), color });
                 }
@@ -345,6 +351,7 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
             let (ox, oy) = (sx / scale, sy / scale);
             match &mut s.draft {
                 Some(Shape::Arrow { b, .. }) => *b = (ix, iy),
+                Some(Shape::Path { points, .. }) => points.push((ix, iy)),
                 Some(Shape::Rect { rect, .. })
                 | Some(Shape::Highlight { rect, .. })
                 | Some(Shape::Blur { rect }) => {
@@ -439,11 +446,12 @@ pub fn open(path: &Path, on_done: impl Fn(&Path) + 'static) {
             let tool_index = match key {
                 gtk::gdk::Key::v | gtk::gdk::Key::V => Some(0),
                 gtk::gdk::Key::a | gtk::gdk::Key::A => Some(1),
-                gtk::gdk::Key::b | gtk::gdk::Key::B => Some(2),
-                gtk::gdk::Key::t | gtk::gdk::Key::T => Some(3),
-                gtk::gdk::Key::n | gtk::gdk::Key::N => Some(4),
-                gtk::gdk::Key::h | gtk::gdk::Key::H => Some(5),
-                gtk::gdk::Key::l | gtk::gdk::Key::L => Some(6),
+                gtk::gdk::Key::d | gtk::gdk::Key::D => Some(2),
+                gtk::gdk::Key::b | gtk::gdk::Key::B => Some(3),
+                gtk::gdk::Key::t | gtk::gdk::Key::T => Some(4),
+                gtk::gdk::Key::n | gtk::gdk::Key::N => Some(5),
+                gtk::gdk::Key::h | gtk::gdk::Key::H => Some(6),
+                gtk::gdk::Key::l | gtk::gdk::Key::L => Some(7),
                 gtk::gdk::Key::Escape => {
                     window_for_keys.close();
                     return glib::Propagation::Stop;
@@ -572,6 +580,7 @@ fn normalized_rect(ax: f64, ay: f64, bx: f64, by: f64) -> (f64, f64, f64, f64) {
 fn draft_is_meaningful(shape: &Shape) -> bool {
     match shape {
         Shape::Arrow { a, b, .. } => (b.0 - a.0).hypot(b.1 - a.1) > 4.0,
+        Shape::Path { points, .. } => points.len() > 2,
         Shape::Rect { rect, .. } | Shape::Highlight { rect, .. } | Shape::Blur { rect } => {
             rect.2 > 4.0 && rect.3 > 4.0
         }
@@ -582,6 +591,17 @@ fn draft_is_meaningful(shape: &Shape) -> bool {
 fn shape_bbox(shape: &Shape) -> (f64, f64, f64, f64) {
     match shape {
         Shape::Arrow { a, b, .. } => normalized_rect(a.0, a.1, b.0, b.1),
+        Shape::Path { points, .. } => {
+            let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
+            let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for (x, y) in points {
+                min_x = min_x.min(*x);
+                min_y = min_y.min(*y);
+                max_x = max_x.max(*x);
+                max_y = max_y.max(*y);
+            }
+            (min_x, min_y, max_x - min_x, max_y - min_y)
+        }
         Shape::Rect { rect, .. } | Shape::Highlight { rect, .. } | Shape::Blur { rect } => *rect,
         Shape::Text { pos, text, .. } => (pos.0, pos.1 - 20.0, text.len() as f64 * 10.0, 26.0),
         Shape::Step { pos, .. } => (pos.0 - 13.0, pos.1 - 13.0, 26.0, 26.0),
@@ -604,6 +624,12 @@ fn move_shape(shape: &mut Shape, dx: f64, dy: f64) {
             a.1 += dy;
             b.0 += dx;
             b.1 += dy;
+        }
+        Shape::Path { points, .. } => {
+            for point in points {
+                point.0 += dx;
+                point.1 += dy;
+            }
         }
         Shape::Rect { rect, .. } | Shape::Highlight { rect, .. } | Shape::Blur { rect } => {
             rect.0 += dx;
@@ -665,6 +691,21 @@ fn draw_scene(cr: &gtk::cairo::Context, state: &mut EditorState) {
                 );
                 cr.close_path();
                 let _ = cr.fill();
+            }
+            Shape::Path { points, color } => {
+                let mut iter = points.iter();
+                let Some((x, y)) = iter.next() else {
+                    continue;
+                };
+                cr.set_source_rgb(color[0], color[1], color[2]);
+                cr.set_line_width(stroke);
+                cr.set_line_cap(gtk::cairo::LineCap::Round);
+                cr.set_line_join(gtk::cairo::LineJoin::Round);
+                cr.move_to(*x, *y);
+                for (x, y) in iter {
+                    cr.line_to(*x, *y);
+                }
+                let _ = cr.stroke();
             }
             Shape::Rect { rect, color } => {
                 cr.set_source_rgb(color[0], color[1], color[2]);

@@ -16,8 +16,10 @@ palette, over the captured screenshot.
   thumbnail's pen button — **screenshots only**; recordings keep the button
   disabled.
 - **Architecture**: a `gtk::DrawingArea` renders the base pixbuf plus a
-  `Vec<Shape>` (`Arrow`, `Rect`, `Highlight`, `Text`, `Step{n}`, `Blur`) via
-  cairo. Geometry lives in **image coordinates**; the view scales down to fit
+  `Vec<Shape>` (`Arrow`, `Path`, `Rect`, `Highlight`, `Text`, `Step{n}`,
+  `Blur`) via cairo. `Path` is the free-draw tool: a polyline of drag points
+  stroked with round caps/joins, same ink and stroke width as the other
+  shapes. Geometry lives in **image coordinates**; the view scales down to fit
   ≤960×600 and export replays the identical shape list at native resolution.
   Stroke width is 3.5 view-px expressed in image space, so annotations keep
   their on-screen proportions in the exported file.
@@ -28,7 +30,7 @@ palette, over the captured screenshot.
   the string as a cairo-rendered shape (with a soft shadow), Esc aborts.
 - **Step** auto-numbers (count of existing steps + 1). **Select (V)** moves
   the topmost shape under the cursor. **Undo** pops the shape list (Ctrl+Z).
-  Tool keys: V A B T N H L, per the mock's tooltips.
+  Tool keys: V A D B T N H L, per the mock's tooltips (D = free draw).
 - **Copy** exports to a temp PNG and pipes it to `wl-copy`; **Done** exports
   over the current artifact (saved or pinned temp) and refreshes the
   thumbnail card, then closes. Export uses a cairo `ImageSurface` +
