@@ -1,6 +1,6 @@
 [package]
 name = "hyprscreen"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 description = "A first-class screenshot and screen-recording app built for Hyprland."
 license = "MIT"
