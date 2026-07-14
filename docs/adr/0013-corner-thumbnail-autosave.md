@@ -41,5 +41,7 @@ non-blocking.
 
 - Feedback for card actions arrives via toasts (ADR-0014), not a status line.
 - `Reveal` moved from a dedicated button into the Save toast's action.
+  *Amended 2026-07-08:* a dedicated Reveal button returned to the card (both
+  kinds, before Discard) — user feedback; the Save toast action remains.
 - The recording thumbnail PNG is a temp owned by the card and cleaned up on
   close.

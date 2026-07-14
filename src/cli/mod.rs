@@ -31,6 +31,34 @@ pub fn run() -> anyhow::Result<()> {
             print_help();
             return Ok(());
         }
+        // TEMP verify hook — remove before committing.
+        ["debug-thumb", kind, path] => {
+            let path = std::path::PathBuf::from(path);
+            let is_shot = *kind == "shot";
+            gtk::init()?;
+            let app = gtk::Application::builder()
+                .application_id("dev.hyprscreen.debug-thumb")
+                .build();
+            use gtk::prelude::*;
+            app.connect_activate(move |app| {
+                crate::app::load_css();
+                std::mem::forget(app.hold());
+                crate::ui::thumbnail::show(crate::ui::thumbnail::ThumbInfo {
+                    kind: if is_shot {
+                        crate::ui::thumbnail::ThumbKind::Screenshot
+                    } else {
+                        crate::ui::thumbnail::ThumbKind::Recording
+                    },
+                    file_path: path.clone(),
+                    display_path: Some(path.clone()),
+                    display_is_temp: false,
+                    meta: "PNG · debug".into(),
+                    saved: false,
+                });
+            });
+            let _exit = gtk::prelude::ApplicationExtManual::run_with_args::<&str>(&app, &[]);
+            return Ok(());
+        }
         ["screenshot", target] => Some(StartupAction::Screenshot(parse_target(target))),
         ["record", target] => Some(StartupAction::Record(parse_target(target))),
         _ => {

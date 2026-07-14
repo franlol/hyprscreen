@@ -392,6 +392,17 @@ pub fn show(info: ThumbInfo) {
         }
     }
 
+    let reveal_button = thumb_button("reveal", "Reveal in folder", false);
+    let data_for_reveal = data.clone();
+    reveal_button.connect_clicked(move |_| {
+        let path = data_for_reveal.borrow().info.file_path.clone();
+        match crate::capture::record::reveal_in_file_manager(&path) {
+            Ok(method) => toast::success("Revealing", &method.feedback_message()),
+            Err(error) => toast::error("Reveal failed", &error.to_string()),
+        }
+    });
+    bar.append(&reveal_button);
+
     let discard_button = thumb_button("trash", "Discard", false);
     let data_for_discard = data.clone();
     discard_button.connect_clicked(move |_| {

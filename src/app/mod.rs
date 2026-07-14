@@ -19,7 +19,7 @@ pub fn build(startup: Option<crate::cli::StartupAction>) -> gtk::Application {
     app
 }
 
-fn load_css() {
+pub(crate) fn load_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_data(CSS);
     gtk::style_context_add_provider_for_display(

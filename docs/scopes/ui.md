@@ -27,7 +27,7 @@
   D cycles delay, P toggles pointer, Esc quits.
 - The pointer toggle is disabled in record mode (wf-recorder always records the cursor).
 - Thumbnail actions: Annotate · Copy (accent) · Save · Share (screenshots) or
-  GIF (recordings) · Discard; close/replace clears a still-pinned temp.
+  GIF (recordings) · Reveal · Discard; close/replace clears a still-pinned temp.
 - HUD-off recording still provides a minimal visual reminder through a 300ms red flash every 5s on the target monitor.
 - The recording HUD should keep the red dot semantics visible without turning the whole HUD red.
 - The recording HUD should read as a compact control bar: red dot accent, neutral `REC` label, readable timer, and clear `Stop` affordance.
