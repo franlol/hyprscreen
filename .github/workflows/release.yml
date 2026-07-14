@@ -27,7 +27,8 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev build-essential pkg-config
+          sudo apt-get install -y libgtk-4-dev libgstreamer1.0-dev \
+            build-essential pkg-config
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

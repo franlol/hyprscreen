@@ -1,1 +1,7 @@
 /target
+
+# makepkg artifacts from building pkg/PKGBUILD in place
+/pkg/*.tar.gz
+/pkg/*.pkg.tar.zst
+/pkg/src/
+/pkg/pkg/
